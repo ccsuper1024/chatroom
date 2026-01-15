@@ -25,15 +25,17 @@ echo "     部署聊天室客户端到远程服务器"
 echo "======================================="
 echo ""
 
-# 检查客户端程序是否存在
-if [ ! -f "$LOCAL_CLIENT" ]; then
-    echo -e "${RED}错误: 客户端应用程序不存在！${NC}"
-    echo -e "${YELLOW}请先编译项目：${NC}"
-    echo "  cd build && cmake .. && make -j\$(nproc)"
+# 检查客户端包是否存在
+PACKAGE_FILE=$(ls dist/chatroom-client-*.tar.gz 2>/dev/null | head -n 1)
+
+if [ -z "$PACKAGE_FILE" ]; then
+    echo -e "${RED}错误: 客户端发布包不存在！${NC}"
+    echo -e "${YELLOW}请先运行打包脚本：${NC}"
+    echo "  ./package.sh"
     exit 1
 fi
 
-echo -e "${GREEN}✓ 找到客户端应用程序: $LOCAL_CLIENT${NC}"
+echo -e "${GREEN}✓ 找到客户端发布包: $PACKAGE_FILE${NC}"
 echo ""
 
 # 遍历每个远程主机
@@ -53,26 +55,22 @@ for HOST in "${REMOTE_HOSTS[@]}"; do
     
     # 创建远程目录
     echo "创建远程目录..."
-    if ssh "$HOST" "mkdir -p $REMOTE_DIR" 2>/dev/null; then
-        echo -e "${GREEN}✓ 远程目录已准备${NC}"
-    else
-        echo -e "${RED}✗ 无法创建远程目录 (可能需要配置SSH密钥)${NC}"
-        echo ""
-        continue
-    fi
+    ssh "$HOST" "mkdir -p $REMOTE_DIR" 2>/dev/null
     
-    # 复制客户端程序
-    echo "上传客户端程序..."
-    if scp -q "$LOCAL_CLIENT" "$HOST:$REMOTE_DIR/chatroom_client" 2>/dev/null; then
-        echo -e "${GREEN}✓ 客户端程序已上传${NC}"
+    # 复制客户端包
+    echo "上传客户端包..."
+    if scp -q "$PACKAGE_FILE" "$HOST:$REMOTE_DIR/" 2>/dev/null; then
+        echo -e "${GREEN}✓ 客户端包已上传${NC}"
     else
         echo -e "${RED}✗ 上传失败${NC}"
         echo ""
         continue
     fi
     
-    # 设置执行权限
-    ssh "$HOST" "chmod +x $REMOTE_DIR/chatroom_client" 2>/dev/null
+    # 解压并运行
+    echo "配置远程客户端..."
+    PACKAGE_NAME=$(basename "$PACKAGE_FILE")
+    ssh "$HOST" "cd $REMOTE_DIR && tar -xzf $PACKAGE_NAME && chmod +x client/start_client.sh" 2>/dev/null
     
     # 检查远程主机是否已有客户端在运行
     echo "检查运行状态..."
@@ -88,28 +86,20 @@ for HOST in "${REMOTE_HOSTS[@]}"; do
     # 在后台启动客户端
     echo "启动客户端连接到服务器 $SERVER_HOST:$SERVER_PORT ..."
     
-    # 创建启动脚本
-    ssh "$HOST" "cat > $REMOTE_DIR/start_client.sh << 'EOF'
-#!/bin/bash
-cd $REMOTE_DIR
-echo \"正在连接到聊天服务器 $SERVER_HOST:$SERVER_PORT ...\"
-echo \"客户端已启动，请输入用户名登录\"
-exec ./chatroom_client $SERVER_HOST $SERVER_PORT
-EOF
-chmod +x $REMOTE_DIR/start_client.sh" 2>/dev/null
+    START_CMD="cd $REMOTE_DIR/client && ./start_client.sh $SERVER_HOST $SERVER_PORT"
     
     # 在screen或tmux会话中启动（如果可用）
     if ssh "$HOST" "command -v screen" > /dev/null 2>&1; then
-        ssh "$HOST" "screen -dmS chatroom bash -c 'cd $REMOTE_DIR && ./start_client.sh'" 2>/dev/null
+        ssh "$HOST" "screen -dmS chatroom bash -c '$START_CMD'" 2>/dev/null
         echo -e "${GREEN}✓ 客户端已在screen会话中启动${NC}"
         echo -e "  ${YELLOW}连接到会话: ssh $HOST -t 'screen -r chatroom'${NC}"
     elif ssh "$HOST" "command -v tmux" > /dev/null 2>&1; then
-        ssh "$HOST" "tmux new-session -d -s chatroom 'cd $REMOTE_DIR && ./start_client.sh'" 2>/dev/null
+        ssh "$HOST" "tmux new-session -d -s chatroom '$START_CMD'" 2>/dev/null
         echo -e "${GREEN}✓ 客户端已在tmux会话中启动${NC}"
         echo -e "  ${YELLOW}连接到会话: ssh $HOST -t 'tmux attach -t chatroom'${NC}"
     else
-        # 直接后台运行（不推荐，因为无法交互）
-        ssh "$HOST" "cd $REMOTE_DIR && nohup ./chatroom_client $SERVER_HOST $SERVER_PORT > chatroom.log 2>&1 &" 2>/dev/null
+        # 直接后台运行
+        ssh "$HOST" "nohup bash -c '$START_CMD' > ../chatroom.log 2>&1 &" 2>/dev/null
         echo -e "${YELLOW}! 客户端已在后台启动（无交互模式）${NC}"
         echo -e "  ${YELLOW}建议安装screen或tmux以支持交互式客户端${NC}"
     fi

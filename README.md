@@ -80,6 +80,18 @@ cmake ..
 make -j$(nproc)
 ```
 
+## 生成发布包
+
+打包生成独立的客户端和服务器压缩包：
+
+```bash
+./package.sh
+```
+
+生成的包位于 `dist/` 目录下：
+- `dist/chatroom-client-1.0.0.tar.gz`
+- `dist/chatroom-server-1.0.0.tar.gz`
+
 ## 运行
 
 ### 方式一：使用启动脚本（推荐）

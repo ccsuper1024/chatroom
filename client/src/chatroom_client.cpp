@@ -9,7 +9,48 @@
 #include <sstream>
 
 ChatRoomClient::ChatRoomClient(const std::string& server_host, int server_port)
-    : server_host_(server_host), server_port_(server_port), last_message_count_(0) {
+    : server_host_(server_host), server_port_(server_port), last_message_count_(0), sock_fd_(-1) {
+    connectToServer();
+}
+
+ChatRoomClient::~ChatRoomClient() {
+    closeConnection();
+}
+
+void ChatRoomClient::connectToServer() {
+    if (sock_fd_ >= 0) {
+        return;
+    }
+
+    // 创建套接字
+    sock_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock_fd_ < 0) {
+        throw std::runtime_error("创建套接字失败");
+    }
+    
+    // 连接服务器
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(server_port_);
+    
+    if (inet_pton(AF_INET, server_host_.c_str(), &server_addr.sin_addr) <= 0) {
+        closeConnection();
+        throw std::runtime_error("无效的服务器地址");
+    }
+    
+    if (connect(sock_fd_, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        closeConnection();
+        throw std::runtime_error("连接服务器失败");
+    }
+    
+    spdlog::info("已连接服务器 {}:{}", server_host_, server_port_);
+}
+
+void ChatRoomClient::closeConnection() {
+    if (sock_fd_ >= 0) {
+        close(sock_fd_);
+        sock_fd_ = -1;
+    }
 }
 
 bool ChatRoomClient::login(const std::string& username) {
@@ -81,25 +122,14 @@ std::vector<std::string> ChatRoomClient::getMessages() {
 std::string ChatRoomClient::sendHttpRequest(const std::string& method, 
                                            const std::string& path, 
                                            const std::string& body) {
-    // 创建套接字
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-        throw std::runtime_error("创建套接字失败");
-    }
-    
-    // 连接服务器
-    struct sockaddr_in server_addr;
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(server_port_);
-    
-    if (inet_pton(AF_INET, server_host_.c_str(), &server_addr.sin_addr) <= 0) {
-        close(sock);
-        throw std::runtime_error("无效的服务器地址");
-    }
-    
-    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        close(sock);
-        throw std::runtime_error("连接服务器失败");
+    // 确保连接存在
+    if (sock_fd_ < 0) {
+        try {
+            connectToServer();
+        } catch (const std::exception& e) {
+            spdlog::error("重新连接失败: {}", e.what());
+            throw;
+        }
     }
     
     // 构建HTTP请求
@@ -108,21 +138,32 @@ std::string ChatRoomClient::sendHttpRequest(const std::string& method,
     request << "Host: " << server_host_ << "\r\n";
     request << "Content-Type: application/json\r\n";
     request << "Content-Length: " << body.size() << "\r\n";
+    // 保持连接
+    request << "Connection: keep-alive\r\n";
     request << "\r\n";
     request << body;
     
     std::string request_str = request.str();
     
     // 发送请求
-    send(sock, request_str.c_str(), request_str.size(), 0);
+    ssize_t sent = send(sock_fd_, request_str.c_str(), request_str.size(), MSG_NOSIGNAL);
+    if (sent < 0) {
+        spdlog::warn("发送失败，尝试重连...");
+        closeConnection();
+        connectToServer();
+        sent = send(sock_fd_, request_str.c_str(), request_str.size(), MSG_NOSIGNAL);
+        if (sent < 0) {
+            closeConnection();
+            throw std::runtime_error("发送请求失败");
+        }
+    }
     
     // 接收响应
     char buffer[4096] = {0};
-    ssize_t bytes_read = recv(sock, buffer, sizeof(buffer) - 1, 0);
-    
-    close(sock);
+    ssize_t bytes_read = recv(sock_fd_, buffer, sizeof(buffer) - 1, 0);
     
     if (bytes_read <= 0) {
+        closeConnection();
         throw std::runtime_error("接收响应失败");
     }
     

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <sstream>
 #include <map>
+#include <thread>
 
 HttpServer::HttpServer(int port) 
     : port_(port), server_fd_(-1), running_(false) {
@@ -72,8 +73,15 @@ void HttpServer::start() {
         }
         
         // 处理客户端请求
-        handleClient(client_fd);
-        close(client_fd);
+        // 使用线程处理客户端，支持并发和长连接
+        std::thread([this, client_fd]() {
+            try {
+                this->handleClient(client_fd);
+            } catch (...) {
+                spdlog::error("处理客户端异常");
+            }
+            close(client_fd);
+        }).detach();
     }
 }
 
@@ -87,33 +95,37 @@ void HttpServer::stop() {
 }
 
 void HttpServer::handleClient(int client_fd) {
-    char buffer[4096] = {0};
-    ssize_t bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
-    
-    if (bytes_read <= 0) {
-        return;
+    while (true) {
+        char buffer[4096] = {0};
+        ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+        
+        if (bytes_read <= 0) {
+            break;
+        }
+        
+        std::string raw_request(buffer, bytes_read);
+        spdlog::debug("收到请求:\n{}", raw_request);
+        
+        // 解析请求
+        HttpRequest request = parseRequest(raw_request);
+        
+        // 查找处理器
+        HttpResponse response;
+        auto it = handlers_.find(request.path);
+        if (it != handlers_.end()) {
+            response = it->second(request);
+        } else {
+            response.status_code = 404;
+            response.status_text = "Not Found";
+            response.body = R"({"error": "路径未找到"})";
+        }
+        
+        // 构建并发送响应
+        std::string response_str = buildResponse(response);
+        if (send(client_fd, response_str.c_str(), response_str.size(), MSG_NOSIGNAL) < 0) {
+            break;
+        }
     }
-    
-    std::string raw_request(buffer, bytes_read);
-    spdlog::debug("收到请求:\n{}", raw_request);
-    
-    // 解析请求
-    HttpRequest request = parseRequest(raw_request);
-    
-    // 查找处理器
-    HttpResponse response;
-    auto it = handlers_.find(request.path);
-    if (it != handlers_.end()) {
-        response = it->second(request);
-    } else {
-        response.status_code = 404;
-        response.status_text = "Not Found";
-        response.body = R"({"error": "路径未找到"})";
-    }
-    
-    // 构建并发送响应
-    std::string response_str = buildResponse(response);
-    send(client_fd, response_str.c_str(), response_str.size(), 0);
 }
 
 HttpRequest HttpServer::parseRequest(const std::string& raw_request) {
