@@ -1,13 +1,17 @@
 #include "http_server.h"
 #include "logger.h"
+#include "thread_pool.h"
+#include "http_codec.h"
+#include "tcp_connection.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/epoll.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <cstring>
 #include <sstream>
 #include <map>
-#include <thread>
 #include <fstream>
 #include <algorithm>
 #include <cctype>
@@ -28,7 +32,12 @@ static std::string trim(const std::string& s) {
 }
 
 static ConnectionCheckConfig loadConnectionCheckConfig() {
-    ConnectionCheckConfig cfg{30, 3};
+    ConnectionCheckConfig cfg{};
+    cfg.check_interval_seconds = 30;
+    cfg.max_failures = 3;
+    cfg.thread_pool_core = 0;
+    cfg.thread_pool_max = 0;
+    cfg.thread_queue_capacity = 0;
     std::ifstream in("conf/server.yaml");
     if (!in.is_open()) {
         return cfg;
@@ -50,6 +59,12 @@ static ConnectionCheckConfig loadConnectionCheckConfig() {
                 cfg.check_interval_seconds = std::stoi(value);
             } else if (key == "max_failures") {
                 cfg.max_failures = std::stoi(value);
+            } else if (key == "thread_pool_core") {
+                cfg.thread_pool_core = static_cast<std::size_t>(std::stoul(value));
+            } else if (key == "thread_pool_max") {
+                cfg.thread_pool_max = static_cast<std::size_t>(std::stoul(value));
+            } else if (key == "thread_queue_capacity") {
+                cfg.thread_queue_capacity = static_cast<std::size_t>(std::stoul(value));
             }
         } catch (...) {
         }
@@ -60,11 +75,28 @@ static ConnectionCheckConfig loadConnectionCheckConfig() {
     if (cfg.max_failures <= 0) {
         cfg.max_failures = 3;
     }
+    
+    std::size_t hw = std::thread::hardware_concurrency();
+    if (hw == 0) {
+        hw = 4;
+    }
+    if (cfg.thread_pool_core == 0) {
+        cfg.thread_pool_core = std::max<std::size_t>(1, hw / 2);
+    }
+    if (cfg.thread_pool_max == 0) {
+        cfg.thread_pool_max = std::max<std::size_t>(cfg.thread_pool_core, hw * 2);
+    }
+    if (cfg.thread_queue_capacity == 0) {
+        cfg.thread_queue_capacity = 1024;
+    }
+    
     return cfg;
 }
 
 HttpServer::HttpServer(int port) 
-    : port_(port), server_fd_(-1), running_(false), conn_cfg_(loadConnectionCheckConfig()) {
+    : port_(port),
+      running_(false),
+      conn_cfg_(loadConnectionCheckConfig()) {
 }
 
 HttpServer::~HttpServer() {
@@ -73,94 +105,89 @@ HttpServer::~HttpServer() {
 
 void HttpServer::registerHandler(const std::string& path, HttpHandler handler) {
     handlers_[path] = handler;
-    Logger::instance().info("注册路由: {}", path);
+    LOG_INFO("注册路由: {}", path);
 }
 
 void HttpServer::start() {
-    // 创建套接字
-    server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd_ < 0) {
-        Logger::instance().error("创建套接字失败");
+    thread_pool_ = std::make_unique<ThreadPool>(
+        conn_cfg_.thread_pool_core,
+        conn_cfg_.thread_pool_max,
+        conn_cfg_.thread_queue_capacity);
+    
+    acceptor_ = std::make_unique<Acceptor>(&loop_, port_);
+    if (!acceptor_->isValid()) {
+        LOG_ERROR("Acceptor 初始化失败，HTTP服务器启动失败");
+        acceptor_.reset();
         return;
     }
-    
-    // 设置端口复用
-    int opt = 1;
-    if (setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        Logger::instance().error("设置套接字选项失败");
-        close(server_fd_);
-        return;
-    }
-    
-    // 绑定地址
-    struct sockaddr_in address;
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(port_);
-    
-    if (bind(server_fd_, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        Logger::instance().error("绑定端口 {} 失败", port_);
-        close(server_fd_);
-        server_fd_ = -1;
-        return;
-    }
-    
-    // 监听
-    if (listen(server_fd_, 10) < 0) {
-        Logger::instance().error("监听失败");
-        close(server_fd_);
-        server_fd_ = -1;
-        return;
-    }
-    
+
+    acceptor_->setNewConnectionCallback([this](int client_fd) {
+        newConnection(client_fd);
+    });
+
     running_ = true;
-    Logger::instance().info("HTTP服务器启动，监听端口: {}", port_);
-    
-    // 接受连接
-    while (running_) {
-        struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
-        
-        int client_fd = accept(server_fd_, (struct sockaddr*)&client_addr, &client_len);
-        if (client_fd < 0) {
-            if (running_) {
-                Logger::instance().error("接受连接失败");
-            }
-            continue;
-        }
-        
-        // 处理客户端请求
-        // 使用线程处理客户端，支持并发和长连接
-        std::thread([this, client_fd]() {
-            try {
-                this->handleClient(client_fd);
-            } catch (...) {
-                Logger::instance().error("处理客户端异常");
-            }
-            close(client_fd);
-        }).detach();
-    }
+    LOG_INFO("HTTP服务器启动，监听端口: {}", port_);
+    loop_.loop([this]() { processPendingResponses(); });
 }
 
 void HttpServer::stop() {
     running_ = false;
-    if (server_fd_ >= 0) {
-        close(server_fd_);
-        server_fd_ = -1;
+    loop_.stop();
+    if (acceptor_) {
+        acceptor_.reset();
     }
-    Logger::instance().info("HTTP服务器已停止");
+    for (auto& kv : connections_) {
+        auto& conn = kv.second;
+        if (conn && !conn->closed()) {
+            conn->shutdown();
+        }
+    }
+    connections_.clear();
+    LOG_INFO("HTTP服务器已停止");
 }
 
-void HttpServer::handleClient(int client_fd) {
+void HttpServer::handleHttpRequest(int fd, const HttpRequest& request) {
+    int request_fd = fd;
+    HttpRequest request_copy = request;
+    thread_pool_->post([this, request_fd, request_copy]() {
+        HttpResponse response;
+        auto it_handler = handlers_.find(request_copy.path);
+        if (it_handler != handlers_.end()) {
+            response = it_handler->second(request_copy);
+        } else {
+            response.status_code = 404;
+            response.status_text = "Not Found";
+            response.body = R"({"error": "路径未找到"})";
+        }
+        std::string response_str = buildResponse(response);
+        PendingResponse pr;
+        pr.fd = request_fd;
+        pr.data = std::move(response_str);
+        std::lock_guard<std::mutex> lock(pending_mutex_);
+        pending_responses_.push_back(std::move(pr));
+    });
+}
+
+void HttpServer::newConnection(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        close(fd);
+        return;
+    }
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        close(fd);
+        return;
+    }
+
     int opt = 1;
-    setsockopt(client_fd, SOL_SOCKET, SO_KEEPALIVE, &opt, sizeof(opt));
+    setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &opt, sizeof(opt));
 
 #ifdef TCP_KEEPIDLE
     int idle = conn_cfg_.check_interval_seconds;
     if (idle <= 0) {
         idle = 30;
     }
-    setsockopt(client_fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
 #endif
 
 #ifdef TCP_KEEPINTVL
@@ -168,7 +195,7 @@ void HttpServer::handleClient(int client_fd) {
     if (intvl <= 0) {
         intvl = 30;
     }
-    setsockopt(client_fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
 #endif
 
 #ifdef TCP_KEEPCNT
@@ -176,87 +203,45 @@ void HttpServer::handleClient(int client_fd) {
     if (cnt <= 0) {
         cnt = 3;
     }
-    setsockopt(client_fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
 #endif
 
-    while (true) {
-        char buffer[4096] = {0};
-        ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
-        
-        if (bytes_read <= 0) {
-            break;
-        }
-        
-        std::string raw_request(buffer, bytes_read);
-        Logger::instance().debug("收到请求:\n{}", raw_request);
-        
-        // 解析请求
-        HttpRequest request = parseRequest(raw_request);
-        
-        // 查找处理器
-        HttpResponse response;
-        auto it = handlers_.find(request.path);
-        if (it != handlers_.end()) {
-            response = it->second(request);
-        } else {
-            response.status_code = 404;
-            response.status_text = "Not Found";
-            response.body = R"({"error": "路径未找到"})";
-        }
-        
-        // 构建并发送响应
-        std::string response_str = buildResponse(response);
-        if (send(client_fd, response_str.c_str(), response_str.size(), MSG_NOSIGNAL) < 0) {
-            break;
-        }
-    }
+    auto conn = std::make_unique<TcpConnection>(this, &loop_, fd);
+    connections_[fd] = std::move(conn);
+    LOG_INFO("新连接建立, fd={}", fd);
 }
 
-HttpRequest HttpServer::parseRequest(const std::string& raw_request) {
-    HttpRequest request;
-    std::istringstream stream(raw_request);
-    std::string line;
-    
-    // 解析请求行
-    if (std::getline(stream, line)) {
-        std::istringstream line_stream(line);
-        line_stream >> request.method >> request.path;
+void HttpServer::closeConnection(int fd) {
+    auto it = connections_.find(fd);
+    if (it == connections_.end()) {
+        return;
     }
-    
-    // 解析头部
-    size_t content_length = 0;
-    while (std::getline(stream, line) && line != "\r") {
-        if (line.find("Content-Type:") == 0) {
-            request.content_type = line.substr(14);
-            // 移除可能的\r
-            if (!request.content_type.empty() && request.content_type.back() == '\r') {
-                request.content_type.pop_back();
-            }
-        } else if (line.find("Content-Length:") == 0) {
-            content_length = std::stoull(line.substr(16));
-        }
+    auto& conn = it->second;
+    if (conn && !conn->closed()) {
+        conn->shutdown();
+        LOG_INFO("连接关闭, fd={}", fd);
     }
-    
-    // 解析请求体
-    if (content_length > 0) {
-        std::string body;
-        char ch;
-        while (body.size() < content_length && stream.get(ch)) {
-            body += ch;
-        }
-        request.body = body;
-    }
-    
-    return request;
+    connections_.erase(it);
 }
 
-std::string HttpServer::buildResponse(const HttpResponse& response) {
-    std::ostringstream oss;
-    oss << "HTTP/1.1 " << response.status_code << " " << response.status_text << "\r\n";
-    oss << "Content-Type: " << response.content_type << "\r\n";
-    oss << "Content-Length: " << response.body.size() << "\r\n";
-    oss << "Access-Control-Allow-Origin: *\r\n";
-    oss << "\r\n";
-    oss << response.body;
-    return oss.str();
+void HttpServer::processPendingResponses() {
+    std::vector<PendingResponse> pending;
+    {
+        std::lock_guard<std::mutex> lock(pending_mutex_);
+        if (pending_responses_.empty()) {
+            return;
+        }
+        pending.swap(pending_responses_);
+    }
+    for (auto& pr : pending) {
+        auto it = connections_.find(pr.fd);
+        if (it == connections_.end()) {
+            continue;
+        }
+        auto& conn = it->second;
+        if (!conn || conn->closed()) {
+            continue;
+        }
+        conn->appendResponse(pr.data);
+    }
 }

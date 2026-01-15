@@ -7,7 +7,7 @@
 std::unique_ptr<ChatRoomServer> g_server;
 
 void signalHandler(int signum) {
-    Logger::instance().info("收到信号 {}, 正在关闭服务器...", signum);
+    LOG_INFO("收到信号 {}, 正在关闭服务器...", signum);
     if (g_server) {
         g_server->stop();
     }
@@ -21,8 +21,8 @@ int main(int argc, char* argv[]) {
         port = std::atoi(argv[1]);
     }
     
-    Logger::instance().info("===== 聊天室服务器 =====");
-    Logger::instance().info("端口: {}", port);
+    LOG_INFO("===== 聊天室服务器 =====");
+    LOG_INFO("端口: {}", port);
     
     // 注册信号处理器
     signal(SIGINT, signalHandler);
@@ -32,7 +32,7 @@ int main(int argc, char* argv[]) {
         g_server = std::make_unique<ChatRoomServer>(port);
         g_server->start();
     } catch (const std::exception& e) {
-        Logger::instance().error("服务器异常: {}", e.what());
+        LOG_ERROR("服务器异常: {}", e.what());
         return 1;
     }
     

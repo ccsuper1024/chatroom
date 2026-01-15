@@ -5,6 +5,10 @@
 #include <vector>
 #include <mutex>
 #include <memory>
+#include <unordered_map>
+#include <chrono>
+#include <thread>
+#include <atomic>
 
 /**
  * 聊天消息结构
@@ -33,6 +37,18 @@ private:
     std::vector<ChatMessage> messages_;  // 消息历史
     std::mutex messages_mutex_;          // 保护消息列表的互斥锁
     
+    struct UserSession {
+        std::string username;
+        std::string connection_id;
+        std::string client_version;
+        std::chrono::system_clock::time_point last_heartbeat;
+    };
+    std::unordered_map<std::string, UserSession> sessions_;
+    std::mutex sessions_mutex_;
+    std::chrono::system_clock::time_point start_time_;
+    std::atomic<bool> running_;
+    std::thread cleanup_thread_;
+    
     // 处理用户登录
     HttpResponse handleLogin(const HttpRequest& request);
     
@@ -45,6 +61,9 @@ private:
     HttpResponse handleGetUsers(const HttpRequest& request);
     
     std::string getCurrentTimestamp();
+    std::string formatTimestamp(const std::chrono::system_clock::time_point& tp);
     
     HttpResponse handleHeartbeat(const HttpRequest& request);
+    
+    void cleanupInactiveSessions();
 };

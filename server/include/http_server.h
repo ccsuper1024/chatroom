@@ -4,28 +4,20 @@
 #include <functional>
 #include <memory>
 #include <map>
-#include <netinet/in.h>
-
-/**
- * 简单的HTTP请求结构
- */
-struct HttpRequest {
-    std::string method;        // GET, POST等
-    std::string path;          // 请求路径
-    std::string body;          // 请求体
-    std::string content_type;  // Content-Type
-};
-
-struct HttpResponse {
-    int status_code = 200;
-    std::string status_text = "OK";
-    std::string body;
-    std::string content_type = "application/json";
-};
+#include <vector>
+#include <mutex>
+#include <cstddef>
+#include "http_codec.h"
+#include "event_loop.h"
+#include "channel.h"
+#include "acceptor.h"
 
 struct ConnectionCheckConfig {
     int check_interval_seconds;
     int max_failures;
+    std::size_t thread_pool_core;
+    std::size_t thread_pool_max;
+    std::size_t thread_queue_capacity;
 };
 
 /**
@@ -33,9 +25,9 @@ struct ConnectionCheckConfig {
  */
 using HttpHandler = std::function<HttpResponse(const HttpRequest&)>;
 
-/**
- * 简单的HTTP服务器实现
- */
+class ThreadPool;
+class TcpConnection;
+
 class HttpServer {
 public:
     explicit HttpServer(int port);
@@ -51,20 +43,30 @@ public:
     void stop();
 
 private:
+    friend class TcpConnection;
+
     int port_;
-    int server_fd_;
     bool running_;
     ConnectionCheckConfig conn_cfg_;
+    std::unique_ptr<ThreadPool> thread_pool_;
     
-    // 处理客户端连接
-    void handleClient(int client_fd);
+    std::map<int, std::unique_ptr<TcpConnection>> connections_;
     
-    // 解析HTTP请求
-    HttpRequest parseRequest(const std::string& raw_request);
+    struct PendingResponse {
+        int fd;
+        std::string data;
+    };
+    std::mutex pending_mutex_;
+    std::vector<PendingResponse> pending_responses_;
     
-    // 构建HTTP响应
-    std::string buildResponse(const HttpResponse& response);
+    void handleHttpRequest(int fd, const HttpRequest& request);
+    void newConnection(int fd);
+    void closeConnection(int fd);
+    void processPendingResponses();
     
     // 路由表
     std::map<std::string, HttpHandler> handlers_;
+
+    EventLoop loop_;
+    std::unique_ptr<Acceptor> acceptor_;
 };

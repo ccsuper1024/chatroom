@@ -60,7 +60,7 @@ void ChatRoomClient::connectToServer() {
         throw std::runtime_error("连接服务器失败");
     }
     
-    Logger::instance().info("已连接服务器 {}:{}", server_host_, server_port_);
+    LOG_INFO("已连接服务器 {}:{}", server_host_, server_port_);
 }
 
 void ChatRoomClient::closeConnection() {
@@ -83,14 +83,14 @@ bool ChatRoomClient::login(const std::string& username) {
             if (resp_json.contains("connection_id") && resp_json["connection_id"].is_string()) {
                 connection_id_ = resp_json["connection_id"].get<std::string>();
             }
-            Logger::instance().info("登录成功: {}, connection_id={}", username_, connection_id_);
+            LOG_INFO("登录成功: {}, connection_id={}", username_, connection_id_);
             return true;
         } else {
-            Logger::instance().error("登录失败");
+            LOG_ERROR("登录失败");
             return false;
         }
     } catch (const std::exception& e) {
-        Logger::instance().error("登录异常: {}", e.what());
+        LOG_ERROR("登录异常: {}", e.what());
         return false;
     }
 }
@@ -106,7 +106,7 @@ bool ChatRoomClient::sendMessage(const std::string& content) {
         auto resp_json = json::parse(response);
         return resp_json["success"];
     } catch (const std::exception& e) {
-        Logger::instance().error("发送消息异常: {}", e.what());
+        LOG_ERROR("发送消息异常: {}", e.what());
         return false;
     }
 }
@@ -133,7 +133,7 @@ std::vector<std::string> ChatRoomClient::getMessages() {
             last_message_count_ = messages.size();
         }
     } catch (const std::exception& e) {
-        Logger::instance().error("获取消息异常: {}", e.what());
+        LOG_ERROR("获取消息异常: {}", e.what());
     }
     
     return new_messages;
@@ -150,10 +150,10 @@ bool ChatRoomClient::sendHeartbeat() {
         }
         std::string response = sendHttpRequest("POST", "/heartbeat", request.dump());
         auto resp_json = json::parse(response);
-        Logger::instance().debug("心跳响应: {}", response);
+        LOG_DEBUG("心跳响应: {}", response);
         return resp_json["success"];
     } catch (const std::exception& e) {
-        Logger::instance().error("心跳异常: {}", e.what());
+        LOG_ERROR("心跳异常: {}", e.what());
         return false;
     }
 }
@@ -166,7 +166,7 @@ std::string ChatRoomClient::sendHttpRequest(const std::string& method,
         try {
             connectToServer();
         } catch (const std::exception& e) {
-            Logger::instance().error("重新连接失败: {}", e.what());
+            LOG_ERROR("重新连接失败: {}", e.what());
             throw;
         }
     }
@@ -189,12 +189,12 @@ std::string ChatRoomClient::sendHttpRequest(const std::string& method,
             if (sent >= 0) {
                 return;
             }
-            Logger::instance().warn("发送失败，尝试重连..., attempt={}", attempt + 1);
+            LOG_WARN("发送失败，尝试重连..., attempt={}", attempt + 1);
             closeConnection();
             try {
                 connectToServer();
             } catch (const std::exception& e) {
-                Logger::instance().error("重连失败: {}", e.what());
+                LOG_ERROR("重连失败: {}", e.what());
             }
         }
         closeConnection();
@@ -208,17 +208,17 @@ std::string ChatRoomClient::sendHttpRequest(const std::string& method,
             if (bytes_read > 0) {
                 return std::string(buffer, bytes_read);
             }
-            Logger::instance().warn("接收失败，尝试重连..., attempt={}", attempt + 1);
+            LOG_WARN("接收失败，尝试重连..., attempt={}", attempt + 1);
             closeConnection();
             try {
                 connectToServer();
             } catch (const std::exception& e) {
-                Logger::instance().error("重连失败: {}", e.what());
+                LOG_ERROR("重连失败: {}", e.what());
                 continue;
             }
             ssize_t sent = send(sock_fd_, request_str.c_str(), request_str.size(), MSG_NOSIGNAL);
             if (sent < 0) {
-                Logger::instance().error("重连后发送请求失败");
+                LOG_ERROR("重连后发送请求失败");
                 continue;
             }
         }

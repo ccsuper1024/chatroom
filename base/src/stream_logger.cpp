@@ -39,9 +39,9 @@ private:
         }
         if (!line.empty()) {
             if (is_error_) {
-                Logger::instance().error("{}", line);
+                LOG_ERROR("{}", line);
             } else {
-                Logger::instance().info("{}", line);
+                LOG_INFO("{}", line);
             }
         }
         buffer_.clear();
