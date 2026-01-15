@@ -1,4 +1,5 @@
 #include "chatroom_client.h"
+#include "client_config.h"
 #include <iostream>
 #include <thread>
 #include <atomic>
@@ -7,12 +8,13 @@
 std::atomic<bool> g_running{true};
 
 void receiveMessages(ChatRoomClient& client) {
+    HeartbeatConfig cfg = getHeartbeatConfig();
     while (g_running) {
         auto messages = client.getMessages();
         for (const auto& msg : messages) {
             std::cout << msg << std::endl;
         }
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        std::this_thread::sleep_for(std::chrono::seconds(cfg.interval_seconds));
     }
 }
 

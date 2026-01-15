@@ -1,9 +1,10 @@
 #include "chatroom_client.h"
 #include "json_utils.h"
-
+#include "client_config.h"
 #include "logger.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
@@ -23,11 +24,26 @@ void ChatRoomClient::connectToServer() {
         return;
     }
 
-    // 创建套接字
     sock_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (sock_fd_ < 0) {
         throw std::runtime_error("创建套接字失败");
     }
+
+    int opt = 1;
+    setsockopt(sock_fd_, SOL_SOCKET, SO_KEEPALIVE, &opt, sizeof(opt));
+
+#ifdef TCP_KEEPIDLE
+    int keep_idle = 30;
+    setsockopt(sock_fd_, IPPROTO_TCP, TCP_KEEPIDLE, &keep_idle, sizeof(keep_idle));
+#endif
+#ifdef TCP_KEEPINTVL
+    int keep_intvl = 10;
+    setsockopt(sock_fd_, IPPROTO_TCP, TCP_KEEPINTVL, &keep_intvl, sizeof(keep_intvl));
+#endif
+#ifdef TCP_KEEPCNT
+    int keep_cnt = 3;
+    setsockopt(sock_fd_, IPPROTO_TCP, TCP_KEEPCNT, &keep_cnt, sizeof(keep_cnt));
+#endif
     
     // 连接服务器
     struct sockaddr_in server_addr;
@@ -39,7 +55,7 @@ void ChatRoomClient::connectToServer() {
         throw std::runtime_error("无效的服务器地址");
     }
     
-    if (connect(sock_fd_, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+    if (connect(sock_fd_, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr)) < 0) {
         closeConnection();
         throw std::runtime_error("连接服务器失败");
     }
@@ -123,7 +139,7 @@ std::vector<std::string> ChatRoomClient::getMessages() {
 std::string ChatRoomClient::sendHttpRequest(const std::string& method, 
                                            const std::string& path, 
                                            const std::string& body) {
-    // 确保连接存在
+    HeartbeatConfig cfg = getHeartbeatConfig();
     if (sock_fd_ < 0) {
         try {
             connectToServer();
@@ -132,8 +148,7 @@ std::string ChatRoomClient::sendHttpRequest(const std::string& method,
             throw;
         }
     }
-    
-    // 构建HTTP请求
+
     std::ostringstream request;
     request << method << " " << path << " HTTP/1.1\r\n";
     request << "Host: " << server_host_ << "\r\n";
@@ -145,32 +160,53 @@ std::string ChatRoomClient::sendHttpRequest(const std::string& method,
     request << body;
     
     std::string request_str = request.str();
-    
-    // 发送请求
-    ssize_t sent = send(sock_fd_, request_str.c_str(), request_str.size(), MSG_NOSIGNAL);
-    if (sent < 0) {
-        Logger::instance().warn("发送失败，尝试重连...");
-        closeConnection();
-        connectToServer();
-        sent = send(sock_fd_, request_str.c_str(), request_str.size(), MSG_NOSIGNAL);
-        if (sent < 0) {
+
+    auto send_with_retry = [&]() {
+        for (int attempt = 0; attempt <= cfg.max_retries; ++attempt) {
+            ssize_t sent = send(sock_fd_, request_str.c_str(), request_str.size(), MSG_NOSIGNAL);
+            if (sent >= 0) {
+                return;
+            }
+            Logger::instance().warn("发送失败，尝试重连..., attempt={}", attempt + 1);
             closeConnection();
-            throw std::runtime_error("发送请求失败");
+            try {
+                connectToServer();
+            } catch (const std::exception& e) {
+                Logger::instance().error("重连失败: {}", e.what());
+            }
         }
-    }
-    
-    // 接收响应
-    char buffer[4096] = {0};
-    ssize_t bytes_read = recv(sock_fd_, buffer, sizeof(buffer) - 1, 0);
-    
-    if (bytes_read <= 0) {
+        closeConnection();
+        throw std::runtime_error("发送请求失败");
+    };
+
+    auto recv_with_retry = [&]() -> std::string {
+        for (int attempt = 0; attempt <= cfg.max_retries; ++attempt) {
+            char buffer[4096] = {0};
+            ssize_t bytes_read = recv(sock_fd_, buffer, sizeof(buffer) - 1, 0);
+            if (bytes_read > 0) {
+                return std::string(buffer, bytes_read);
+            }
+            Logger::instance().warn("接收失败，尝试重连..., attempt={}", attempt + 1);
+            closeConnection();
+            try {
+                connectToServer();
+            } catch (const std::exception& e) {
+                Logger::instance().error("重连失败: {}", e.what());
+                continue;
+            }
+            ssize_t sent = send(sock_fd_, request_str.c_str(), request_str.size(), MSG_NOSIGNAL);
+            if (sent < 0) {
+                Logger::instance().error("重连后发送请求失败");
+                continue;
+            }
+        }
         closeConnection();
         throw std::runtime_error("接收响应失败");
-    }
+    };
+
+    send_with_retry();
+    std::string response = recv_with_retry();
     
-    std::string response(buffer, bytes_read);
-    
-    // 提取响应体
     size_t body_start = response.find("\r\n\r\n");
     if (body_start != std::string::npos) {
         return response.substr(body_start + 4);

@@ -3,6 +3,7 @@ include_directories(${CMAKE_SOURCE_DIR}/server/include)
 
 add_library(chatroom_client_lib
     src/chatroom_client.cpp
+    src/client_config.cpp
 )
 target_link_libraries(chatroom_client_lib
     PUBLIC chatroom_base
