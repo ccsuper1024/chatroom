@@ -16,14 +16,16 @@ struct HttpRequest {
     std::string content_type;  // Content-Type
 };
 
-/**
- * 简单的HTTP响应结构
- */
 struct HttpResponse {
     int status_code = 200;
     std::string status_text = "OK";
     std::string body;
     std::string content_type = "application/json";
+};
+
+struct ConnectionCheckConfig {
+    int check_interval_seconds;
+    int max_failures;
 };
 
 /**
@@ -52,6 +54,7 @@ private:
     int port_;
     int server_fd_;
     bool running_;
+    ConnectionCheckConfig conn_cfg_;
     
     // 处理客户端连接
     void handleClient(int client_fd);

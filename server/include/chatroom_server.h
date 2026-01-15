@@ -42,9 +42,9 @@ private:
     // 处理获取消息
     HttpResponse handleGetMessages(const HttpRequest& request);
     
-    // 处理获取在线用户列表
     HttpResponse handleGetUsers(const HttpRequest& request);
     
-    // 获取当前时间戳
     std::string getCurrentTimestamp();
+    
+    HttpResponse handleHeartbeat(const HttpRequest& request);
 };

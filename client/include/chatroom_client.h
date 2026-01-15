@@ -22,12 +22,15 @@ public:
     // 获取用户名
     std::string getUsername() const { return username_; }
 
+    bool sendHeartbeat();
+
     ~ChatRoomClient();
 
 private:
     std::string server_host_;
     int server_port_;
     std::string username_;
+    std::string connection_id_;
     size_t last_message_count_;
     int sock_fd_ = -1;
     

@@ -4,11 +4,22 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <atomic>
+
+static std::atomic<unsigned long long> g_connection_counter{0};
+
+static std::string generateConnectionId() {
+    auto now = std::chrono::system_clock::now().time_since_epoch();
+    auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    unsigned long long id = ++g_connection_counter;
+    std::ostringstream oss;
+    oss << "conn-" << millis << "-" << id;
+    return oss.str();
+}
 
 ChatRoomServer::ChatRoomServer(int port) {
     http_server_ = std::make_unique<HttpServer>(port);
     
-    // 注册路由
     http_server_->registerHandler("/login", 
         [this](const HttpRequest& req) { return handleLogin(req); });
     
@@ -20,6 +31,9 @@ ChatRoomServer::ChatRoomServer(int port) {
     
     http_server_->registerHandler("/users", 
         [this](const HttpRequest& req) { return handleGetUsers(req); });
+    
+    http_server_->registerHandler("/heartbeat",
+        [this](const HttpRequest& req) { return handleHeartbeat(req); });
 }
 
 void ChatRoomServer::start() {
@@ -39,12 +53,14 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
         auto req_json = json::parse(request.body);
         std::string username = req_json["username"];
         
-        Logger::instance().info("用户登录: {}", username);
+        std::string connection_id = generateConnectionId();
+        Logger::instance().info("用户登录: {}, connection_id={}", username, connection_id);
         
         json resp_json;
         resp_json["success"] = true;
         resp_json["message"] = "登录成功";
         resp_json["username"] = username;
+        resp_json["connection_id"] = connection_id;
         
         response.body = resp_json.dump();
     } catch (const std::exception& e) {
@@ -156,4 +172,31 @@ std::string ChatRoomServer::getCurrentTimestamp() {
     std::ostringstream oss;
     oss << std::put_time(std::localtime(&time), "%Y-%m-%d %H:%M:%S");
     return oss.str();
+}
+
+HttpResponse ChatRoomServer::handleHeartbeat(const HttpRequest& request) {
+    HttpResponse response;
+    try {
+        auto req_json = json::parse(request.body);
+        std::string username = req_json.value("username", "");
+        std::string version = req_json.value("client_version", "");
+        std::string conn_id = req_json.value("connection_id", "");
+        Logger::instance().info("收到心跳: user={}, version={}, connection_id={}", username, version, conn_id);
+        json resp_json;
+        resp_json["success"] = true;
+        resp_json["message"] = "heartbeat ok";
+        resp_json["timestamp"] = getCurrentTimestamp();
+        resp_json["connection_id"] = conn_id;
+        resp_json["client_version"] = version;
+        response.body = resp_json.dump();
+    } catch (const std::exception& e) {
+        Logger::instance().error("处理心跳请求失败: {}", e.what());
+        response.status_code = 400;
+        response.status_text = "Bad Request";
+        json error_json;
+        error_json["success"] = false;
+        error_json["error"] = e.what();
+        response.body = error_json.dump();
+    }
+    return response;
 }

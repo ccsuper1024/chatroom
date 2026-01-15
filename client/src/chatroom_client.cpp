@@ -80,7 +80,10 @@ bool ChatRoomClient::login(const std::string& username) {
         auto resp_json = json::parse(response);
         if (resp_json["success"]) {
             username_ = username;
-            Logger::instance().info("登录成功: {}", username_);
+            if (resp_json.contains("connection_id") && resp_json["connection_id"].is_string()) {
+                connection_id_ = resp_json["connection_id"].get<std::string>();
+            }
+            Logger::instance().info("登录成功: {}, connection_id={}", username_, connection_id_);
             return true;
         } else {
             Logger::instance().error("登录失败");
@@ -134,6 +137,25 @@ std::vector<std::string> ChatRoomClient::getMessages() {
     }
     
     return new_messages;
+}
+
+bool ChatRoomClient::sendHeartbeat() {
+    try {
+        HeartbeatConfig cfg = getHeartbeatConfig();
+        json request;
+        request["username"] = username_;
+        request["client_version"] = cfg.client_version;
+        if (!connection_id_.empty()) {
+            request["connection_id"] = connection_id_;
+        }
+        std::string response = sendHttpRequest("POST", "/heartbeat", request.dump());
+        auto resp_json = json::parse(response);
+        Logger::instance().debug("心跳响应: {}", response);
+        return resp_json["success"];
+    } catch (const std::exception& e) {
+        Logger::instance().error("心跳异常: {}", e.what());
+        return false;
+    }
 }
 
 std::string ChatRoomClient::sendHttpRequest(const std::string& method, 

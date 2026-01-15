@@ -17,8 +17,10 @@ static std::string trim(const std::string& s) {
 }
 
 static HeartbeatConfig loadHeartbeatConfig() {
-    //初始化
-    HeartbeatConfig cfg{1, 1};
+    HeartbeatConfig cfg;
+    cfg.interval_seconds = 1;
+    cfg.max_retries = 1;
+    cfg.client_version = "1.0.0";
     
     std::ifstream in("conf/client.yaml");
     if (!in.is_open()) {
@@ -41,6 +43,8 @@ static HeartbeatConfig loadHeartbeatConfig() {
                 cfg.interval_seconds = std::stoi(value);
             } else if (key == "max_retries") {
                 cfg.max_retries = std::stoi(value);
+            } else if (key == "client_version") {
+                cfg.client_version = value;
             }
         } catch (...) {
         }
@@ -51,6 +55,9 @@ static HeartbeatConfig loadHeartbeatConfig() {
     if (cfg.max_retries < 0) {
         cfg.max_retries = 0;
     }
+    if (cfg.client_version.empty()) {
+        cfg.client_version = "1.0.0";
+    }
     return cfg;
 }
 
@@ -59,4 +66,3 @@ HeartbeatConfig getHeartbeatConfig() {
     static HeartbeatConfig cfg = loadHeartbeatConfig();
     return cfg;
 }
-

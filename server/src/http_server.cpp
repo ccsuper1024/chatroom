@@ -2,14 +2,69 @@
 #include "logger.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <unistd.h>
 #include <cstring>
 #include <sstream>
 #include <map>
 #include <thread>
+#include <fstream>
+#include <algorithm>
+#include <cctype>
+
+static std::string trim(const std::string& s) {
+    auto begin = s.begin();
+    while (begin != s.end() && std::isspace(static_cast<unsigned char>(*begin))) {
+        ++begin;
+    }
+    auto end = s.end();
+    if (begin == end) {
+        return std::string();
+    }
+    do {
+        --end;
+    } while (end != begin && std::isspace(static_cast<unsigned char>(*end)));
+    return std::string(begin, end + 1);
+}
+
+static ConnectionCheckConfig loadConnectionCheckConfig() {
+    ConnectionCheckConfig cfg{30, 3};
+    std::ifstream in("conf/server.yaml");
+    if (!in.is_open()) {
+        return cfg;
+    }
+    std::string line;
+    while (std::getline(in, line)) {
+        std::string t = trim(line);
+        if (t.empty() || t[0] == '#') {
+            continue;
+        }
+        auto pos = t.find(':');
+        if (pos == std::string::npos) {
+            continue;
+        }
+        std::string key = trim(t.substr(0, pos));
+        std::string value = trim(t.substr(pos + 1));
+        try {
+            if (key == "check_interval_seconds") {
+                cfg.check_interval_seconds = std::stoi(value);
+            } else if (key == "max_failures") {
+                cfg.max_failures = std::stoi(value);
+            }
+        } catch (...) {
+        }
+    }
+    if (cfg.check_interval_seconds <= 0) {
+        cfg.check_interval_seconds = 30;
+    }
+    if (cfg.max_failures <= 0) {
+        cfg.max_failures = 3;
+    }
+    return cfg;
+}
 
 HttpServer::HttpServer(int port) 
-    : port_(port), server_fd_(-1), running_(false) {
+    : port_(port), server_fd_(-1), running_(false), conn_cfg_(loadConnectionCheckConfig()) {
 }
 
 HttpServer::~HttpServer() {
@@ -97,6 +152,33 @@ void HttpServer::stop() {
 }
 
 void HttpServer::handleClient(int client_fd) {
+    int opt = 1;
+    setsockopt(client_fd, SOL_SOCKET, SO_KEEPALIVE, &opt, sizeof(opt));
+
+#ifdef TCP_KEEPIDLE
+    int idle = conn_cfg_.check_interval_seconds;
+    if (idle <= 0) {
+        idle = 30;
+    }
+    setsockopt(client_fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+#endif
+
+#ifdef TCP_KEEPINTVL
+    int intvl = conn_cfg_.check_interval_seconds;
+    if (intvl <= 0) {
+        intvl = 30;
+    }
+    setsockopt(client_fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+#endif
+
+#ifdef TCP_KEEPCNT
+    int cnt = conn_cfg_.max_failures;
+    if (cnt <= 0) {
+        cnt = 3;
+    }
+    setsockopt(client_fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
+#endif
+
     while (true) {
         char buffer[4096] = {0};
         ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);

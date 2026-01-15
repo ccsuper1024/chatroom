@@ -11,6 +11,7 @@ std::atomic<bool> g_running{true};
 void receiveMessages(ChatRoomClient& client) {
     HeartbeatConfig cfg = getHeartbeatConfig();
     while (g_running) {
+        client.sendHeartbeat();
         auto messages = client.getMessages();
         for (const auto& msg : messages) {
             std::cout << msg << std::endl;
