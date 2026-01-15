@@ -5,10 +5,10 @@
 
 set -e
 
-# 配置
 REMOTE_HOSTS=("192.168.233.128" "192.168.233.132")
 REMOTE_DIR="~/code/cplusplus/chatroom"
 LOCAL_CLIENT="build/client/chatroom_client"
+SSH_BASE_OPTS="-o ControlMaster=auto -o ControlPersist=600 -o ControlPath=~/.ssh/cm-%r@%h-%p"
 
 # 服务器配置（从参数获取，默认值）
 SERVER_HOST=${1:-"192.168.233.1"}  # 聊天服务器地址
@@ -55,11 +55,11 @@ for HOST in "${REMOTE_HOSTS[@]}"; do
     
     # 创建远程目录
     echo "创建远程目录..."
-    ssh "$HOST" "mkdir -p $REMOTE_DIR" 2>/dev/null
+    ssh $SSH_BASE_OPTS "$HOST" "mkdir -p $REMOTE_DIR" 2>/dev/null
     
     # 复制客户端包
     echo "上传客户端包..."
-    if scp -q "$PACKAGE_FILE" "$HOST:$REMOTE_DIR/" 2>/dev/null; then
+    if scp $SSH_BASE_OPTS -q "$PACKAGE_FILE" "$HOST:$REMOTE_DIR/" 2>/dev/null; then
         echo -e "${GREEN}✓ 客户端包已上传${NC}"
     else
         echo -e "${RED}✗ 上传失败${NC}"
@@ -70,16 +70,16 @@ for HOST in "${REMOTE_HOSTS[@]}"; do
     # 解压并运行
     echo "配置远程客户端..."
     PACKAGE_NAME=$(basename "$PACKAGE_FILE")
-    ssh "$HOST" "cd $REMOTE_DIR && tar -xzf $PACKAGE_NAME && chmod +x client/start_client.sh" 2>/dev/null
+    ssh $SSH_BASE_OPTS "$HOST" "cd $REMOTE_DIR && tar -xzf $PACKAGE_NAME && chmod +x client/start_client.sh" 2>/dev/null
     
     # 检查远程主机是否已有客户端在运行
     echo "检查运行状态..."
-    RUNNING=$(ssh "$HOST" "pgrep -f chatroom_client" 2>/dev/null || echo "")
+    RUNNING=$(ssh $SSH_BASE_OPTS "$HOST" "pgrep -f chatroom_client" 2>/dev/null || echo "")
     
     if [ -n "$RUNNING" ]; then
         echo -e "${YELLOW}! 检测到已运行的客户端进程 (PID: $RUNNING)${NC}"
         echo "  停止旧进程..."
-        ssh "$HOST" "pkill -f chatroom_client" 2>/dev/null || true
+        ssh $SSH_BASE_OPTS "$HOST" "pkill -f chatroom_client" 2>/dev/null || true
         sleep 1
     fi
     
@@ -89,17 +89,17 @@ for HOST in "${REMOTE_HOSTS[@]}"; do
     START_CMD="cd $REMOTE_DIR/client && ./start_client.sh $SERVER_HOST $SERVER_PORT"
     
     # 在screen或tmux会话中启动（如果可用）
-    if ssh "$HOST" "command -v screen" > /dev/null 2>&1; then
-        ssh "$HOST" "screen -dmS chatroom bash -c '$START_CMD'" 2>/dev/null
+    if ssh $SSH_BASE_OPTS "$HOST" "command -v screen" > /dev/null 2>&1; then
+        ssh $SSH_BASE_OPTS "$HOST" "screen -dmS chatroom bash -c '$START_CMD'" 2>/dev/null
         echo -e "${GREEN}✓ 客户端已在screen会话中启动${NC}"
         echo -e "  ${YELLOW}连接到会话: ssh $HOST -t 'screen -r chatroom'${NC}"
-    elif ssh "$HOST" "command -v tmux" > /dev/null 2>&1; then
-        ssh "$HOST" "tmux new-session -d -s chatroom '$START_CMD'" 2>/dev/null
+    elif ssh $SSH_BASE_OPTS "$HOST" "command -v tmux" > /dev/null 2>&1; then
+        ssh $SSH_BASE_OPTS "$HOST" "tmux new-session -d -s chatroom '$START_CMD'" 2>/dev/null
         echo -e "${GREEN}✓ 客户端已在tmux会话中启动${NC}"
         echo -e "  ${YELLOW}连接到会话: ssh $HOST -t 'tmux attach -t chatroom'${NC}"
     else
         # 直接后台运行
-        ssh "$HOST" "nohup bash -c '$START_CMD' > ../chatroom.log 2>&1 &" 2>/dev/null
+        ssh $SSH_BASE_OPTS "$HOST" "nohup bash -c '$START_CMD' > ../chatroom.log 2>&1 &" 2>/dev/null
         echo -e "${YELLOW}! 客户端已在后台启动（无交互模式）${NC}"
         echo -e "  ${YELLOW}建议安装screen或tmux以支持交互式客户端${NC}"
     fi
