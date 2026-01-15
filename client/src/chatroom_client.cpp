@@ -1,6 +1,7 @@
 #include "chatroom_client.h"
 #include "json_utils.h"
-#include <spdlog/spdlog.h>
+
+#include "logger.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -9,7 +10,6 @@
 #include <sstream>
 
 ChatRoomClient::ChatRoomClient(const std::string& server_host, int server_port)
-<<<<<<< HEAD
     : server_host_(server_host), server_port_(server_port), last_message_count_(0), sock_fd_(-1) {
     connectToServer();
 }
@@ -44,7 +44,7 @@ void ChatRoomClient::connectToServer() {
         throw std::runtime_error("连接服务器失败");
     }
     
-    spdlog::info("已连接服务器 {}:{}", server_host_, server_port_);
+    Logger::instance().info("已连接服务器 {}:{}", server_host_, server_port_);
 }
 
 void ChatRoomClient::closeConnection() {
@@ -52,9 +52,6 @@ void ChatRoomClient::closeConnection() {
         close(sock_fd_);
         sock_fd_ = -1;
     }
-=======
-    : server_host_(server_host), server_port_(server_port), last_message_count_(0) {
->>>>>>> 150285635cb1f744ad939d098adb679a73ec8ba2
 }
 
 bool ChatRoomClient::login(const std::string& username) {
@@ -67,14 +64,14 @@ bool ChatRoomClient::login(const std::string& username) {
         auto resp_json = json::parse(response);
         if (resp_json["success"]) {
             username_ = username;
-            spdlog::info("登录成功: {}", username_);
+            Logger::instance().info("登录成功: {}", username_);
             return true;
         } else {
-            spdlog::error("登录失败");
+            Logger::instance().error("登录失败");
             return false;
         }
     } catch (const std::exception& e) {
-        spdlog::error("登录异常: {}", e.what());
+        Logger::instance().error("登录异常: {}", e.what());
         return false;
     }
 }
@@ -90,7 +87,7 @@ bool ChatRoomClient::sendMessage(const std::string& content) {
         auto resp_json = json::parse(response);
         return resp_json["success"];
     } catch (const std::exception& e) {
-        spdlog::error("发送消息异常: {}", e.what());
+        Logger::instance().error("发送消息异常: {}", e.what());
         return false;
     }
 }
@@ -117,7 +114,7 @@ std::vector<std::string> ChatRoomClient::getMessages() {
             last_message_count_ = messages.size();
         }
     } catch (const std::exception& e) {
-        spdlog::error("获取消息异常: {}", e.what());
+        Logger::instance().error("获取消息异常: {}", e.what());
     }
     
     return new_messages;
@@ -126,36 +123,14 @@ std::vector<std::string> ChatRoomClient::getMessages() {
 std::string ChatRoomClient::sendHttpRequest(const std::string& method, 
                                            const std::string& path, 
                                            const std::string& body) {
-<<<<<<< HEAD
     // 确保连接存在
     if (sock_fd_ < 0) {
         try {
             connectToServer();
         } catch (const std::exception& e) {
-            spdlog::error("重新连接失败: {}", e.what());
+            Logger::instance().error("重新连接失败: {}", e.what());
             throw;
         }
-=======
-    // 创建套接字
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-        throw std::runtime_error("创建套接字失败");
-    }
-    
-    // 连接服务器
-    struct sockaddr_in server_addr;
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(server_port_);
-    
-    if (inet_pton(AF_INET, server_host_.c_str(), &server_addr.sin_addr) <= 0) {
-        close(sock);
-        throw std::runtime_error("无效的服务器地址");
-    }
-    
-    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        close(sock);
-        throw std::runtime_error("连接服务器失败");
->>>>>>> 150285635cb1f744ad939d098adb679a73ec8ba2
     }
     
     // 构建HTTP请求
@@ -164,21 +139,17 @@ std::string ChatRoomClient::sendHttpRequest(const std::string& method,
     request << "Host: " << server_host_ << "\r\n";
     request << "Content-Type: application/json\r\n";
     request << "Content-Length: " << body.size() << "\r\n";
-<<<<<<< HEAD
     // 保持连接
     request << "Connection: keep-alive\r\n";
-=======
->>>>>>> 150285635cb1f744ad939d098adb679a73ec8ba2
     request << "\r\n";
     request << body;
     
     std::string request_str = request.str();
     
     // 发送请求
-<<<<<<< HEAD
     ssize_t sent = send(sock_fd_, request_str.c_str(), request_str.size(), MSG_NOSIGNAL);
     if (sent < 0) {
-        spdlog::warn("发送失败，尝试重连...");
+        Logger::instance().warn("发送失败，尝试重连...");
         closeConnection();
         connectToServer();
         sent = send(sock_fd_, request_str.c_str(), request_str.size(), MSG_NOSIGNAL);
@@ -194,17 +165,6 @@ std::string ChatRoomClient::sendHttpRequest(const std::string& method,
     
     if (bytes_read <= 0) {
         closeConnection();
-=======
-    send(sock, request_str.c_str(), request_str.size(), 0);
-    
-    // 接收响应
-    char buffer[4096] = {0};
-    ssize_t bytes_read = recv(sock, buffer, sizeof(buffer) - 1, 0);
-    
-    close(sock);
-    
-    if (bytes_read <= 0) {
->>>>>>> 150285635cb1f744ad939d098adb679a73ec8ba2
         throw std::runtime_error("接收响应失败");
     }
     

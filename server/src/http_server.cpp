@@ -1,5 +1,5 @@
 #include "http_server.h"
-#include <spdlog/spdlog.h>
+#include "logger.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -18,21 +18,21 @@ HttpServer::~HttpServer() {
 
 void HttpServer::registerHandler(const std::string& path, HttpHandler handler) {
     handlers_[path] = handler;
-    spdlog::info("注册路由: {}", path);
+    Logger::instance().info("注册路由: {}", path);
 }
 
 void HttpServer::start() {
     // 创建套接字
     server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd_ < 0) {
-        spdlog::error("创建套接字失败");
+        Logger::instance().error("创建套接字失败");
         return;
     }
     
     // 设置端口复用
     int opt = 1;
     if (setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        spdlog::error("设置套接字选项失败");
+        Logger::instance().error("设置套接字选项失败");
         close(server_fd_);
         return;
     }
@@ -44,20 +44,22 @@ void HttpServer::start() {
     address.sin_port = htons(port_);
     
     if (bind(server_fd_, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        spdlog::error("绑定端口 {} 失败", port_);
+        Logger::instance().error("绑定端口 {} 失败", port_);
         close(server_fd_);
+        server_fd_ = -1;
         return;
     }
     
     // 监听
     if (listen(server_fd_, 10) < 0) {
-        spdlog::error("监听失败");
+        Logger::instance().error("监听失败");
         close(server_fd_);
+        server_fd_ = -1;
         return;
     }
     
     running_ = true;
-    spdlog::info("HTTP服务器启动，监听端口: {}", port_);
+    Logger::instance().info("HTTP服务器启动，监听端口: {}", port_);
     
     // 接受连接
     while (running_) {
@@ -67,7 +69,7 @@ void HttpServer::start() {
         int client_fd = accept(server_fd_, (struct sockaddr*)&client_addr, &client_len);
         if (client_fd < 0) {
             if (running_) {
-                spdlog::error("接受连接失败");
+                Logger::instance().error("接受连接失败");
             }
             continue;
         }
@@ -78,7 +80,7 @@ void HttpServer::start() {
             try {
                 this->handleClient(client_fd);
             } catch (...) {
-                spdlog::error("处理客户端异常");
+                Logger::instance().error("处理客户端异常");
             }
             close(client_fd);
         }).detach();
@@ -91,7 +93,7 @@ void HttpServer::stop() {
         close(server_fd_);
         server_fd_ = -1;
     }
-    spdlog::info("HTTP服务器已停止");
+    Logger::instance().info("HTTP服务器已停止");
 }
 
 void HttpServer::handleClient(int client_fd) {
@@ -104,7 +106,7 @@ void HttpServer::handleClient(int client_fd) {
         }
         
         std::string raw_request(buffer, bytes_read);
-        spdlog::debug("收到请求:\n{}", raw_request);
+        Logger::instance().debug("收到请求:\n{}", raw_request);
         
         // 解析请求
         HttpRequest request = parseRequest(raw_request);

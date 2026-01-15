@@ -22,25 +22,19 @@ public:
     // 获取用户名
     std::string getUsername() const { return username_; }
 
-<<<<<<< HEAD
     ~ChatRoomClient();
 
-=======
->>>>>>> 150285635cb1f744ad939d098adb679a73ec8ba2
 private:
     std::string server_host_;
     int server_port_;
     std::string username_;
     size_t last_message_count_;
-<<<<<<< HEAD
     int sock_fd_ = -1;
     
     // 连接服务器
     void connectToServer();
     // 关闭连接
     void closeConnection();
-=======
->>>>>>> 150285635cb1f744ad939d098adb679a73ec8ba2
     
     // 发送HTTP请求
     std::string sendHttpRequest(const std::string& method, 

@@ -38,9 +38,8 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# 启用测试
 enable_testing()
 
-# 添加服务器和客户端子目录
+add_subdirectory(base)
 add_subdirectory(server)
 add_subdirectory(client)

@@ -1,6 +1,6 @@
 #include "chatroom_server.h"
 #include "json_utils.h"
-#include <spdlog/spdlog.h>
+#include "logger.h"
 #include <chrono>
 #include <iomanip>
 #include <sstream>
@@ -23,12 +23,12 @@ ChatRoomServer::ChatRoomServer(int port) {
 }
 
 void ChatRoomServer::start() {
-    spdlog::info("聊天室服务器启动");
+    Logger::instance().info("聊天室服务器启动");
     http_server_->start();
 }
 
 void ChatRoomServer::stop() {
-    spdlog::info("聊天室服务器停止");
+    Logger::instance().info("聊天室服务器停止");
     http_server_->stop();
 }
 
@@ -39,7 +39,7 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
         auto req_json = json::parse(request.body);
         std::string username = req_json["username"];
         
-        spdlog::info("用户登录: {}", username);
+        Logger::instance().info("用户登录: {}", username);
         
         json resp_json;
         resp_json["success"] = true;
@@ -48,7 +48,7 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
         
         response.body = resp_json.dump();
     } catch (const std::exception& e) {
-        spdlog::error("处理登录请求失败: {}", e.what());
+        Logger::instance().error("处理登录请求失败: {}", e.what());
         response.status_code = 400;
         response.status_text = "Bad Request";
         
@@ -77,7 +77,7 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
             messages_.push_back(msg);
         }
         
-        spdlog::info("收到消息 [{}]: {}", msg.username, msg.content);
+        Logger::instance().info("收到消息 [{}]: {}", msg.username, msg.content);
         
         json resp_json;
         resp_json["success"] = true;
@@ -85,7 +85,7 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
         
         response.body = resp_json.dump();
     } catch (const std::exception& e) {
-        spdlog::error("处理发送消息请求失败: {}", e.what());
+        Logger::instance().error("处理发送消息请求失败: {}", e.what());
         response.status_code = 400;
         response.status_text = "Bad Request";
         
@@ -122,7 +122,7 @@ HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
         
         response.body = resp_json.dump();
     } catch (const std::exception& e) {
-        spdlog::error("处理获取消息请求失败: {}", e.what());
+        Logger::instance().error("处理获取消息请求失败: {}", e.what());
         response.status_code = 500;
         response.status_text = "Internal Server Error";
         

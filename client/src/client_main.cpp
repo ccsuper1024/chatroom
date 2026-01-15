@@ -1,5 +1,4 @@
 #include "chatroom_client.h"
-#include <spdlog/spdlog.h>
 #include <iostream>
 #include <thread>
 #include <atomic>
@@ -18,10 +17,6 @@ void receiveMessages(ChatRoomClient& client) {
 }
 
 int main(int argc, char* argv[]) {
-    // 设置日志级别
-    spdlog::set_level(spdlog::level::warn);
-    
-    // 解析命令行参数
     std::string server_host = "127.0.0.1";
     int server_port = 8080;
     
