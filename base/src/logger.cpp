@@ -1,4 +1,6 @@
 ﻿#include "logger.h"
+#include <filesystem>
+#include <spdlog/sinks/rotating_file_sink.h>
 
 Logger& Logger::instance() {
     static Logger instance;
@@ -6,7 +8,17 @@ Logger& Logger::instance() {
 }
 
 Logger::Logger() {
-    logger_ = spdlog::default_logger();
+    std::filesystem::create_directories("logs");
+
+    std::size_t max_size = 5 * 1024 * 1024;
+    std::size_t max_files = 3;
+
+    logger_ = spdlog::rotating_logger_mt(
+        "chatroom_logger",
+        "logs/chatroom.log",
+        max_size,
+        max_files
+    );
     logger_->set_level(spdlog::level::info);
     logger_->set_pattern("[%Y-%m-%d %H:%M:%S] [%^%l%$] %v");
 }

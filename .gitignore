@@ -27,3 +27,7 @@ Makefile
 
 # 测试输出
 Testing/
+
+# 日志和打包输出
+logs/*
+dist/*
