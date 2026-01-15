@@ -1,5 +1,6 @@
 #include "chatroom_client.h"
 #include "client_config.h"
+#include "stream_logger.h"
 #include <iostream>
 #include <thread>
 #include <atomic>
@@ -19,6 +20,7 @@ void receiveMessages(ChatRoomClient& client) {
 }
 
 int main(int argc, char* argv[]) {
+    initLoggerForStdStreams();
     std::string server_host = "127.0.0.1";
     int server_port = 8080;
     

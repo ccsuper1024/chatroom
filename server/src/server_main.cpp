@@ -1,5 +1,6 @@
 #include "chatroom_server.h"
 #include "logger.h"
+#include "stream_logger.h"
 #include <csignal>
 #include <memory>
 
@@ -14,6 +15,7 @@ void signalHandler(int signum) {
 }
 
 int main(int argc, char* argv[]) {
+    initLoggerForStdStreams();
     int port = 8080;
     if (argc > 1) {
         port = std::atoi(argv[1]);
