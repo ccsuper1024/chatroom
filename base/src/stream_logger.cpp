@@ -1,6 +1,7 @@
 #include "stream_logger.h"
 #include "logger.h"
 
+#include <iostream>
 #include <ostream>
 #include <string>
 
@@ -57,4 +58,3 @@ void initLoggerForStdStreams() {
     std::cout.rdbuf(&cout_buf);
     std::cerr.rdbuf(&cerr_buf);
 }
-

@@ -1,5 +1,6 @@
 add_library(chatroom_base
     src/logger.cpp
+    src/stream_logger.cpp
 )
 
 target_include_directories(chatroom_base
@@ -9,4 +10,3 @@ target_include_directories(chatroom_base
 target_link_libraries(chatroom_base
     PUBLIC spdlog::spdlog
 )
-
