@@ -1,0 +1,3 @@
+check_interval_seconds: 30
+max_failures: 3
+
