@@ -12,6 +12,53 @@ static std::atomic<unsigned long long> g_connection_counter{0};
 
 static constexpr int HEARTBEAT_TIMEOUT_SECONDS = 60;
 static constexpr int SESSION_CLEANUP_INTERVAL_SECONDS = 30;
+static constexpr std::size_t MAX_MESSAGE_HISTORY = 1000;
+
+static bool isValidUsername(const std::string& name) {
+    if (name.empty()) {
+        return false;
+    }
+    if (name.size() > 32) {
+        return false;
+    }
+    for (unsigned char c : name) {
+        if (c < 32 || c == 127) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static std::size_t parseSinceParam(const std::string& path) {
+    auto pos = path.find('?');
+    if (pos == std::string::npos) {
+        return 0;
+    }
+    std::size_t result = 0;
+    std::string query = path.substr(pos + 1);
+    std::size_t start = 0;
+    while (start < query.size()) {
+        auto amp = query.find('&', start);
+        std::string pair = query.substr(start, amp == std::string::npos ? std::string::npos : amp - start);
+        auto eq = pair.find('=');
+        if (eq != std::string::npos) {
+            std::string key = pair.substr(0, eq);
+            std::string value = pair.substr(eq + 1);
+            if (key == "since") {
+                try {
+                    result = static_cast<std::size_t>(std::stoull(value));
+                } catch (...) {
+                }
+                break;
+            }
+        }
+        if (amp == std::string::npos) {
+            break;
+        }
+        start = amp + 1;
+    }
+    return result;
+}
 
 static std::string generateConnectionId() {
     auto now = std::chrono::system_clock::now().time_since_epoch();
@@ -23,7 +70,8 @@ static std::string generateConnectionId() {
 }
 
 ChatRoomServer::ChatRoomServer(int port)
-    : running_(false) {
+    : base_message_index_(0),
+      running_(false) {
     http_server_ = std::make_unique<HttpServer>(port);
     
     http_server_->registerHandler("/login", 
@@ -110,27 +158,50 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
     
         try {
         auto req_json = json::parse(request.body);
-        std::string username = req_json["username"];
-        
+        std::string username = req_json.value("username", "");
+        if (!isValidUsername(username)) {
+            response.status_code = 400;
+            response.status_text = "Bad Request";
+            json error_json;
+            error_json["success"] = false;
+            error_json["error"] = "invalid username";
+            response.body = error_json.dump();
+            return response;
+        }
         std::string connection_id = generateConnectionId();
-        LOG_INFO("用户登录: {}, connection_id={}", username, connection_id);
-        
         {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
+            std::string final_username = username;
+            bool exists = true;
+            std::size_t suffix = 1;
+            while (exists) {
+                exists = false;
+                for (const auto& kv : sessions_) {
+                    if (kv.second.username == final_username) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists) {
+                    break;
+                }
+                ++suffix;
+                final_username = username + "#" + std::to_string(suffix);
+            }
             UserSession session;
-            session.username = username;
+            session.username = final_username;
             session.connection_id = connection_id;
             session.client_version.clear();
             session.last_heartbeat = std::chrono::system_clock::now();
             sessions_[connection_id] = std::move(session);
+            username = final_username;
         }
-        
+        LOG_INFO("用户登录: {}, connection_id={}", username, connection_id);
         json resp_json;
         resp_json["success"] = true;
         resp_json["message"] = "登录成功";
         resp_json["username"] = username;
         resp_json["connection_id"] = connection_id;
-        
         response.body = resp_json.dump();
     } catch (const std::exception& e) {
         LOG_ERROR("处理登录请求失败: {}", e.what());
@@ -151,23 +222,41 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
     
     try {
         auto req_json = json::parse(request.body);
-        
+        std::string username = req_json.value("username", "");
+        std::string content = req_json.value("content", "");
+        std::string connection_id = req_json.value("connection_id", "");
+        if (!connection_id.empty()) {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            auto it = sessions_.find(connection_id);
+            if (it != sessions_.end()) {
+                username = it->second.username;
+            }
+        }
+        if (!isValidUsername(username) || content.empty()) {
+            response.status_code = 400;
+            response.status_text = "Bad Request";
+            json error_json;
+            error_json["success"] = false;
+            error_json["error"] = "invalid message";
+            response.body = error_json.dump();
+            return response;
+        }
         ChatMessage msg;
-        msg.username = req_json["username"];
-        msg.content = req_json["content"];
+        msg.username = username;
+        msg.content = content;
         msg.timestamp = getCurrentTimestamp();
-        
         {
             std::lock_guard<std::mutex> lock(messages_mutex_);
             messages_.push_back(msg);
+            if (messages_.size() > MAX_MESSAGE_HISTORY) {
+                messages_.pop_front();
+                ++base_message_index_;
+            }
         }
-        
         LOG_INFO("收到消息 [{}]: {}", msg.username, msg.content);
-        
         json resp_json;
         resp_json["success"] = true;
         resp_json["message"] = "消息发送成功";
-        
         response.body = resp_json.dump();
     } catch (const std::exception& e) {
         LOG_ERROR("处理发送消息请求失败: {}", e.what());
