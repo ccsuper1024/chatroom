@@ -34,3 +34,6 @@ dist/*
 
 # Clangd cache
 .cache/
+
+# 第三方依赖库
+third_party/

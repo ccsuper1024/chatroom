@@ -9,6 +9,7 @@ add_library(chatroom_server_lib
     src/acceptor.cpp
     src/tcp_connection.cpp
     src/chatroom_server.cpp
+    src/metrics_collector.cpp
 )
 target_link_libraries(chatroom_server_lib
     PUBLIC chatroom_base
@@ -20,6 +21,16 @@ add_executable(chatroom_server
 )
 target_link_libraries(chatroom_server
     PRIVATE chatroom_server_lib
+    PRIVATE pthread
+)
+
+# Test executable
+add_executable(chatroom_test
+    tests/chatroom_test.cpp
+)
+target_link_libraries(chatroom_test
+    PRIVATE chatroom_server_lib
+    PRIVATE GTest::gtest_main
     PRIVATE pthread
 )
 

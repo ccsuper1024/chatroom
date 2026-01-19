@@ -96,7 +96,8 @@ static std::string generateConnectionId() {
 }
 
 ChatRoomServer::ChatRoomServer(int port)
-    : base_message_index_(0),
+    : metrics_collector_(std::make_shared<MetricsCollector>()),
+      base_message_index_(0),
       running_(false) {
     http_server_ = std::make_unique<HttpServer>(port);
     
@@ -132,23 +133,19 @@ void ChatRoomServer::start() {
 }
 
 HttpResponse ChatRoomServer::handleMetrics(const HttpRequest& request) {
-    HttpResponse resp;
-
     if (!checkRateLimit(request.remote_ip)) {
-        resp.status_code = 429;
-        resp.status_text = "Too Many Requests";
-        resp.body = R"({"error": "Too Many Requests"})";
-        return resp;
+        return CreateErrorResponse(ErrorCode::RATE_LIMITED);
     }
 
     try {
-        json body;
-        (void)request;
+        json body = metrics_collector_->getMetrics();
         body["success"] = true;
+
         {
             std::lock_guard<std::mutex> lock(messages_mutex_);
             body["message_count"] = messages_.size();
         }
+
         {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
             body["session_count"] = sessions_.size();
@@ -168,17 +165,13 @@ HttpResponse ChatRoomServer::handleMetrics(const HttpRequest& request) {
                 }
             }
             body["active_session_count"] = active;
+            metrics_collector_->updateActiveSessions(active);
+            
             json versions_json;
             for (const auto& kv : version_counts) {
                 versions_json[kv.first] = kv.second;
             }
             body["client_versions"] = versions_json;
-            if (start_time_.time_since_epoch().count() > 0) {
-                auto uptime = duration_cast<seconds>(now - start_time_).count();
-                body["uptime_seconds"] = uptime;
-            } else {
-                body["uptime_seconds"] = 0;
-            }
         }
 
         // Thread pool metrics
@@ -187,15 +180,13 @@ HttpResponse ChatRoomServer::handleMetrics(const HttpRequest& request) {
         body["thread_pool_thread_count"] = http_server_->getThreadPoolThreadCount();
         body["thread_pool_active_thread_count"] = http_server_->getThreadPoolActiveThreadCount();
 
-        body["timestamp"] = getCurrentTimestamp();
+        HttpResponse resp;
         resp.body = body.dump();
+        return resp;
     } catch (const std::exception& e) {
         LOG_ERROR("处理 Metrics 请求失败: {}", e.what());
-        resp.status_code = 500;
-        resp.status_text = "Internal Server Error";
-        resp.body = R"({"error": "Internal Server Error"})";
+        return CreateErrorResponse(ErrorCode::INTERNAL_ERROR);
     }
-    return resp;
 }
 
 void ChatRoomServer::stop() {
@@ -209,26 +200,17 @@ void ChatRoomServer::stop() {
 }
 
 HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
-    HttpResponse response;
+    metrics_collector_->recordRequest("POST", "/login");
 
     if (!checkRateLimit(request.remote_ip)) {
-        response.status_code = 429;
-        response.status_text = "Too Many Requests";
-        response.body = R"({"error": "Too Many Requests"})";
-        return response;
+        return CreateErrorResponse(ErrorCode::RATE_LIMITED);
     }
     
-        try {
+    try {
         auto req_json = json::parse(request.body);
         std::string username = req_json.value("username", "");
         if (!validateUsername(username)) {
-            response.status_code = 400;
-            response.status_text = "Bad Request";
-            json error_json;
-            error_json["success"] = false;
-            error_json["error"] = "invalid username (1-32 chars, alphanumeric and underscore only)";
-            response.body = error_json.dump();
-            return response;
+            return CreateErrorResponse(ErrorCode::INVALID_USERNAME);
         }
         std::string connection_id = generateConnectionId();
         {
@@ -264,29 +246,22 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
         resp_json["message"] = "登录成功";
         resp_json["username"] = username;
         resp_json["connection_id"] = connection_id;
+        
+        HttpResponse response;
         response.body = resp_json.dump();
+        return response;
     } catch (const std::exception& e) {
         LOG_ERROR("处理登录请求失败: {}", e.what());
-        response.status_code = 400;
-        response.status_text = "Bad Request";
-        
-        json error_json;
-        error_json["success"] = false;
-        error_json["error"] = "Invalid request format";
-        response.body = error_json.dump();
+        metrics_collector_->recordError("login_error");
+        return CreateErrorResponse(ErrorCode::INVALID_REQUEST);
     }
-    
-    return response;
 }
 
 HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
-    HttpResponse response;
+    metrics_collector_->recordRequest("POST", "/send");
 
     if (!checkRateLimit(request.remote_ip)) {
-        response.status_code = 429;
-        response.status_text = "Too Many Requests";
-        response.body = R"({"error": "Too Many Requests"})";
-        return response;
+        return CreateErrorResponse(ErrorCode::RATE_LIMITED);
     }
     
     try {
@@ -302,22 +277,10 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
             }
         }
         if (!validateUsername(username)) {
-            response.status_code = 400;
-            response.status_text = "Bad Request";
-            json error_json;
-            error_json["success"] = false;
-            error_json["error"] = "invalid username";
-            response.body = error_json.dump();
-            return response;
+            return CreateErrorResponse(ErrorCode::INVALID_USERNAME);
         }
         if (!validateMessage(content)) {
-            response.status_code = 400;
-            response.status_text = "Bad Request";
-            json error_json;
-            error_json["success"] = false;
-            error_json["error"] = "invalid message content (1-1024 chars, no control chars)";
-            response.body = error_json.dump();
-            return response;
+            return CreateErrorResponse(ErrorCode::INVALID_MESSAGE);
         }
         ChatMessage msg;
         msg.username = username;
@@ -326,6 +289,7 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
         {
             std::lock_guard<std::mutex> lock(messages_mutex_);
             messages_.push_back(msg);
+            metrics_collector_->updateMessageCount(messages_.size());
             LOG_INFO("Message stored. Total messages: {}, base_index: {}", messages_.size(), base_message_index_);
             if (messages_.size() > MAX_MESSAGE_HISTORY) {
                 messages_.pop_front();
@@ -336,29 +300,22 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
         json resp_json;
         resp_json["success"] = true;
         resp_json["message"] = "消息发送成功";
+        
+        HttpResponse response;
         response.body = resp_json.dump();
+        return response;
     } catch (const std::exception& e) {
         LOG_ERROR("处理发送消息请求失败: {}", e.what());
-        response.status_code = 400;
-        response.status_text = "Bad Request";
-        
-        json error_json;
-        error_json["success"] = false;
-        error_json["error"] = "Invalid request format";
-        response.body = error_json.dump();
+        metrics_collector_->recordError("send_message_error");
+        return CreateErrorResponse(ErrorCode::INVALID_REQUEST);
     }
-    
-    return response;
 }
 
 HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
-    HttpResponse response;
+    metrics_collector_->recordRequest("GET", "/messages");
 
     if (!checkRateLimit(request.remote_ip)) {
-        response.status_code = 429;
-        response.status_text = "Too Many Requests";
-        response.body = R"({"error": "Too Many Requests"})";
-        return response;
+        return CreateErrorResponse(ErrorCode::RATE_LIMITED);
     }
     
     try {
@@ -396,29 +353,21 @@ HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
             resp_json["total_count"] = base_message_index_ + messages_.size();
         }
         
+        HttpResponse response;
         response.body = resp_json.dump();
+        return response;
     } catch (const std::exception& e) {
         LOG_ERROR("处理获取消息请求失败: {}", e.what());
-        response.status_code = 500;
-        response.status_text = "Internal Server Error";
-        
-        json error_json;
-        error_json["success"] = false;
-        error_json["error"] = "Internal Server Error";
-        response.body = error_json.dump();
+        metrics_collector_->recordError("get_messages_error");
+        return CreateErrorResponse(ErrorCode::INTERNAL_ERROR);
     }
-    
-    return response;
 }
 
 HttpResponse ChatRoomServer::handleGetUsers(const HttpRequest& request) {
-    HttpResponse response;
+    metrics_collector_->recordRequest("GET", "/users");
 
     if (!checkRateLimit(request.remote_ip)) {
-        response.status_code = 429;
-        response.status_text = "Too Many Requests";
-        response.body = R"({"error": "Too Many Requests"})";
-        return response;
+        return CreateErrorResponse(ErrorCode::RATE_LIMITED);
     }
     
     try {
@@ -446,15 +395,14 @@ HttpResponse ChatRoomServer::handleGetUsers(const HttpRequest& request) {
             }
         }
         
+        HttpResponse response;
         response.body = resp_json.dump();
+        return response;
     } catch (const std::exception& e) {
         LOG_ERROR("处理获取用户列表请求失败: {}", e.what());
-        response.status_code = 500;
-        response.status_text = "Internal Server Error";
-        response.body = R"({"error": "Internal Server Error"})";
+        metrics_collector_->recordError("get_users_error");
+        return CreateErrorResponse(ErrorCode::INTERNAL_ERROR);
     }
-    
-    return response;
 }
 
 std::string ChatRoomServer::getCurrentTimestamp() {
@@ -469,13 +417,10 @@ std::string ChatRoomServer::formatTimestamp(const std::chrono::system_clock::tim
 }
 
 HttpResponse ChatRoomServer::handleHeartbeat(const HttpRequest& request) {
-    HttpResponse response;
+    metrics_collector_->recordRequest("POST", "/heartbeat");
 
     if (!checkRateLimit(request.remote_ip)) {
-        response.status_code = 429;
-        response.status_text = "Too Many Requests";
-        response.body = R"({"error": "Too Many Requests"})";
-        return response;
+        return CreateErrorResponse(ErrorCode::RATE_LIMITED);
     }
 
     try {
@@ -483,7 +428,7 @@ HttpResponse ChatRoomServer::handleHeartbeat(const HttpRequest& request) {
         std::string username = req_json.value("username", "");
         std::string version = req_json.value("client_version", "");
         std::string conn_id = req_json.value("connection_id", "");
-            LOG_INFO("收到心跳: user={}, version={}, connection_id={}", username, version, conn_id);
+        LOG_INFO("收到心跳: user={}, version={}, connection_id={}", username, version, conn_id);
         
         if (!conn_id.empty()) {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
@@ -500,17 +445,15 @@ HttpResponse ChatRoomServer::handleHeartbeat(const HttpRequest& request) {
         resp_json["timestamp"] = getCurrentTimestamp();
         resp_json["connection_id"] = conn_id;
         resp_json["client_version"] = version;
+        
+        HttpResponse response;
         response.body = resp_json.dump();
-        } catch (const std::exception& e) {
-            LOG_ERROR("处理心跳请求失败: {}", e.what());
-        response.status_code = 400;
-        response.status_text = "Bad Request";
-        json error_json;
-        error_json["success"] = false;
-        error_json["error"] = "Invalid request format";
-        response.body = error_json.dump();
+        return response;
+    } catch (const std::exception& e) {
+        LOG_ERROR("处理心跳请求失败: {}", e.what());
+        metrics_collector_->recordError("heartbeat_error");
+        return CreateErrorResponse(ErrorCode::INVALID_REQUEST);
     }
-    return response;
 }
 
 void ChatRoomServer::cleanupInactiveSessions() {

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "http_server.h"
+#include "metrics_collector.h"
+#include "server_error.h"
 #include <string>
 #include <vector>
 #include <deque>
@@ -27,6 +29,7 @@ struct ChatMessage {
  */
 class ChatRoomServer {
 public:
+    friend class ChatRoomServerTest;
     explicit ChatRoomServer(int port);
     
     // 启动聊天室服务器
@@ -37,6 +40,7 @@ public:
 
 private:
     std::unique_ptr<HttpServer> http_server_;
+    std::shared_ptr<MetricsCollector> metrics_collector_;
     std::deque<ChatMessage> messages_;  // 消息历史
     std::size_t base_message_index_;    // 历史消息的起始索引
     std::mutex messages_mutex_;          // 保护消息列表的互斥锁

@@ -12,6 +12,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # 添加编译选项
 add_compile_options(-Wall -Wextra -Wpedantic)
 
+# 设置依赖库下载目录到项目根目录下的 third_party
+set(FETCHCONTENT_BASE_DIR ${CMAKE_SOURCE_DIR}/third_party)
+
 # 引入FetchContent模块用于下载第三方库
 include(FetchContent)
 
