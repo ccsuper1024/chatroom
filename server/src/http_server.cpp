@@ -146,10 +146,23 @@ void HttpServer::stop() {
     LOG_INFO("HTTP服务器已停止");
 }
 
+std::size_t HttpServer::getThreadPoolQueueSize() const {
+    return thread_pool_->queueSize();
+}
+
+std::size_t HttpServer::getThreadPoolRejectedCount() const {
+    return thread_pool_->rejectedCount();
+}
+
+std::size_t HttpServer::getThreadPoolThreadCount() const {
+    return thread_pool_->currentThreadCount();
+}
+
 void HttpServer::handleHttpRequest(int fd, const HttpRequest& request) {
     int request_fd = fd;
     HttpRequest request_copy = request;
-    thread_pool_->post([this, request_fd, request_copy]() {
+    
+    bool posted = thread_pool_->tryPost([this, request_fd, request_copy]() {
         HttpResponse response;
         
         std::string path = request_copy.path;
@@ -173,6 +186,23 @@ void HttpServer::handleHttpRequest(int fd, const HttpRequest& request) {
         std::lock_guard<std::mutex> lock(pending_mutex_);
         pending_responses_.push_back(std::move(pr));
     });
+
+    if (!posted) {
+        // 线程池已满，直接在当前线程返回 503
+        HttpResponse response;
+        response.status_code = 503;
+        response.status_text = "Service Unavailable";
+        response.body = R"({"error": "服务器繁忙，请稍后重试"})";
+        std::string response_str = buildResponse(response);
+        
+        PendingResponse pr;
+        pr.fd = request_fd;
+        pr.data = std::move(response_str);
+        {
+            std::lock_guard<std::mutex> lock(pending_mutex_);
+            pending_responses_.push_back(std::move(pr));
+        }
+    }
 }
 
 void HttpServer::newConnection(int fd) {

@@ -42,6 +42,11 @@ public:
     // 停止服务器
     void stop();
 
+    // 线程池指标
+    std::size_t getThreadPoolQueueSize() const;
+    std::size_t getThreadPoolRejectedCount() const;
+    std::size_t getThreadPoolThreadCount() const;
+
 private:
     friend class TcpConnection;
 

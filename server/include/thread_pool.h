@@ -16,9 +16,11 @@ public:
     ~ThreadPool();
 
     void post(std::function<void()> task);
+    bool tryPost(std::function<void()> task);
 
     std::size_t currentThreadCount() const;
     std::size_t queueSize() const;
+    std::size_t rejectedCount() const;
 
 private:
     void addWorker();
@@ -34,5 +36,6 @@ private:
     std::size_t queue_capacity_;
     bool stop_;
     std::size_t current_threads_;
+    std::size_t rejected_tasks_;
 };
 

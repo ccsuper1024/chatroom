@@ -92,6 +92,45 @@ make -j$(nproc)
 - `dist/chatroom-client-1.0.0.tar.gz`
 - `dist/chatroom-server-1.0.0.tar.gz`
 
+## 性能调优
+
+### 线程池配置
+
+服务器使用线程池处理请求。默认配置根据 CPU 核心数自动调整，但在高并发场景下，建议根据实际负载进行手动配置。
+
+配置项位于 `conf/server.yaml`（如果不存在则创建）：
+
+```yaml
+# 核心线程数：建议设置为 CPU 核心数 或 CPU 核心数 * 2（IO密集型）
+thread_pool_core: 4
+
+# 最大线程数：建议设置为 CPU 核心数 * 4 ~ * 8
+thread_pool_max: 16
+
+# 任务队列容量：根据内存限制和预期积压请求数设置
+thread_queue_capacity: 1024
+```
+
+### 监控指标
+
+服务器提供 `/metrics` 接口暴露运行时指标，包括线程池状态：
+
+```json
+{
+  "success": true,
+  "thread_pool_queue_size": 0,      // 当前等待处理的任务数
+  "thread_pool_rejected_count": 0,  // 因队列满被拒绝的任务总数
+  "thread_pool_thread_count": 4,    // 当前工作线程数
+  "active_session_count": 1,
+  "session_count": 1,
+  "message_count": 10,
+  "uptime_seconds": 120,
+  ...
+}
+```
+
+建议定期采集这些指标，当 `thread_pool_queue_size` 持续较高或 `thread_pool_rejected_count` 增长时，应考虑增加线程数或扩容队列。
+
 ## 运行
 
 ### 方式一：使用启动脚本（推荐）

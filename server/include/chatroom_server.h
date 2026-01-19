@@ -62,6 +62,8 @@ private:
     
     HttpResponse handleGetUsers(const HttpRequest& request);
     
+    HttpResponse handleMetrics(const HttpRequest& request);
+
     std::string getCurrentTimestamp();
     std::string formatTimestamp(const std::chrono::system_clock::time_point& tp);
     

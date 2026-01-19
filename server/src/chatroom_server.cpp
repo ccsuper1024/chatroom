@@ -90,50 +90,7 @@ ChatRoomServer::ChatRoomServer(int port)
         [this](const HttpRequest& req) { return handleHeartbeat(req); });
     
     http_server_->registerHandler("/metrics",
-        [this](const HttpRequest& req) {
-            HttpResponse resp;
-            json body;
-            (void)req;
-            body["success"] = true;
-            {
-                std::lock_guard<std::mutex> lock(messages_mutex_);
-                body["message_count"] = messages_.size();
-            }
-            {
-                std::lock_guard<std::mutex> lock(sessions_mutex_);
-                body["session_count"] = sessions_.size();
-                using namespace std::chrono;
-                auto now = system_clock::now();
-                std::size_t active = 0;
-                std::map<std::string, std::size_t> version_counts;
-                for (const auto& kv : sessions_) {
-                    const auto& s = kv.second;
-                    auto diff = duration_cast<seconds>(now - s.last_heartbeat).count();
-                    bool is_active = diff <= HEARTBEAT_TIMEOUT_SECONDS;
-                    if (is_active) {
-                        ++active;
-                    }
-                    if (!s.client_version.empty()) {
-                        ++version_counts[s.client_version];
-                    }
-                }
-                body["active_session_count"] = active;
-                json versions_json;
-                for (const auto& kv : version_counts) {
-                    versions_json[kv.first] = kv.second;
-                }
-                body["client_versions"] = versions_json;
-                if (start_time_.time_since_epoch().count() > 0) {
-                    auto uptime = duration_cast<seconds>(now - start_time_).count();
-                    body["uptime_seconds"] = uptime;
-                } else {
-                    body["uptime_seconds"] = 0;
-                }
-            }
-            body["timestamp"] = getCurrentTimestamp();
-            resp.body = body.dump();
-            return resp;
-        });
+        [this](const HttpRequest& req) { return handleMetrics(req); });
 }
 
 void ChatRoomServer::start() {
@@ -146,6 +103,57 @@ void ChatRoomServer::start() {
     if (cleanup_thread_.joinable()) {
         cleanup_thread_.join();
     }
+}
+
+HttpResponse ChatRoomServer::handleMetrics(const HttpRequest& request) {
+    HttpResponse resp;
+    json body;
+    (void)request;
+    body["success"] = true;
+    {
+        std::lock_guard<std::mutex> lock(messages_mutex_);
+        body["message_count"] = messages_.size();
+    }
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        body["session_count"] = sessions_.size();
+        using namespace std::chrono;
+        auto now = system_clock::now();
+        std::size_t active = 0;
+        std::map<std::string, std::size_t> version_counts;
+        for (const auto& kv : sessions_) {
+            const auto& s = kv.second;
+            auto diff = duration_cast<seconds>(now - s.last_heartbeat).count();
+            bool is_active = diff <= HEARTBEAT_TIMEOUT_SECONDS;
+            if (is_active) {
+                ++active;
+            }
+            if (!s.client_version.empty()) {
+                ++version_counts[s.client_version];
+            }
+        }
+        body["active_session_count"] = active;
+        json versions_json;
+        for (const auto& kv : version_counts) {
+            versions_json[kv.first] = kv.second;
+        }
+        body["client_versions"] = versions_json;
+        if (start_time_.time_since_epoch().count() > 0) {
+            auto uptime = duration_cast<seconds>(now - start_time_).count();
+            body["uptime_seconds"] = uptime;
+        } else {
+            body["uptime_seconds"] = 0;
+        }
+    }
+
+    // Thread pool metrics
+    body["thread_pool_queue_size"] = http_server_->getThreadPoolQueueSize();
+    body["thread_pool_rejected_count"] = http_server_->getThreadPoolRejectedCount();
+    body["thread_pool_thread_count"] = http_server_->getThreadPoolThreadCount();
+
+    body["timestamp"] = getCurrentTimestamp();
+    resp.body = body.dump();
+    return resp;
 }
 
 void ChatRoomServer::stop() {
