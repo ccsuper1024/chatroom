@@ -26,6 +26,11 @@ void EventLoop::loop(const std::function<void()>& postLoopHook) {
             }
             continue;
         }
+
+        if (static_cast<size_t>(n) == events_.size()) {
+            events_.resize(events_.size() * 2);
+        }
+        
         for (int i = 0; i < n; ++i) {
             auto* ch = static_cast<Channel*>(events_[i].data.ptr);
             if (ch) {

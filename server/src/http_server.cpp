@@ -155,7 +155,17 @@ std::size_t HttpServer::getThreadPoolRejectedCount() const {
 }
 
 std::size_t HttpServer::getThreadPoolThreadCount() const {
-    return thread_pool_->currentThreadCount();
+    if (thread_pool_) {
+        return thread_pool_->currentThreadCount();
+    }
+    return 0;
+}
+
+std::size_t HttpServer::getThreadPoolActiveThreadCount() const {
+    if (thread_pool_) {
+        return thread_pool_->activeThreadCount();
+    }
+    return 0;
 }
 
 void HttpServer::handleHttpRequest(int fd, const HttpRequest& request) {

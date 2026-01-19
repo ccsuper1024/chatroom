@@ -150,6 +150,7 @@ HttpResponse ChatRoomServer::handleMetrics(const HttpRequest& request) {
     body["thread_pool_queue_size"] = http_server_->getThreadPoolQueueSize();
     body["thread_pool_rejected_count"] = http_server_->getThreadPoolRejectedCount();
     body["thread_pool_thread_count"] = http_server_->getThreadPoolThreadCount();
+    body["thread_pool_active_thread_count"] = http_server_->getThreadPoolActiveThreadCount();
 
     body["timestamp"] = getCurrentTimestamp();
     resp.body = body.dump();
@@ -158,6 +159,11 @@ HttpResponse ChatRoomServer::handleMetrics(const HttpRequest& request) {
 
 void ChatRoomServer::stop() {
     LOG_INFO("聊天室服务器停止");
+    running_ = false;
+    cleanup_cv_.notify_all();
+    if (cleanup_thread_.joinable()) {
+        cleanup_thread_.join();
+    }
     http_server_->stop();
 }
 
@@ -417,7 +423,13 @@ HttpResponse ChatRoomServer::handleHeartbeat(const HttpRequest& request) {
 void ChatRoomServer::cleanupInactiveSessions() {
     using namespace std::chrono;
     while (running_.load()) {
-        std::this_thread::sleep_for(std::chrono::seconds(SESSION_CLEANUP_INTERVAL_SECONDS));
+        {
+            std::unique_lock<std::mutex> lock(cleanup_mutex_);
+            cleanup_cv_.wait_for(lock, std::chrono::seconds(SESSION_CLEANUP_INTERVAL_SECONDS), 
+                [this]{ return !running_.load(); });
+        }
+        if (!running_.load()) break;
+
         auto now = system_clock::now();
         std::lock_guard<std::mutex> lock(sessions_mutex_);
         for (auto it = sessions_.begin(); it != sessions_.end();) {

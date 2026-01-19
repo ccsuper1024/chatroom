@@ -8,6 +8,7 @@ ThreadPool::ThreadPool(std::size_t core_threads,
       queue_capacity_(queue_capacity),
       stop_(false),
       current_threads_(0),
+      active_threads_(0),
       rejected_tasks_(0) {
     if (core_threads_ == 0) {
         core_threads_ = 1;
@@ -76,6 +77,11 @@ std::size_t ThreadPool::currentThreadCount() const {
     return current_threads_;
 }
 
+std::size_t ThreadPool::activeThreadCount() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return active_threads_;
+}
+
 std::size_t ThreadPool::queueSize() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return tasks_.size();
@@ -104,7 +110,15 @@ void ThreadPool::workerLoop() {
             tasks_.pop();
             not_full_.notify_one();
         }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ++active_threads_;
+        }
         task();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            --active_threads_;
+        }
     }
 }
 

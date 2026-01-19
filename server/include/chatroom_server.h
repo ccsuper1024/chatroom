@@ -8,8 +8,10 @@
 #include <memory>
 #include <unordered_map>
 #include <chrono>
+#include <ratio>
 #include <thread>
 #include <atomic>
+#include <condition_variable>
 
 /**
  * 聊天消息结构
@@ -50,6 +52,8 @@ private:
     std::chrono::system_clock::time_point start_time_;
     std::atomic<bool> running_;
     std::thread cleanup_thread_;
+    std::mutex cleanup_mutex_;
+    std::condition_variable cleanup_cv_;
     
     // 处理用户登录
     HttpResponse handleLogin(const HttpRequest& request);

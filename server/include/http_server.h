@@ -46,6 +46,7 @@ public:
     std::size_t getThreadPoolQueueSize() const;
     std::size_t getThreadPoolRejectedCount() const;
     std::size_t getThreadPoolThreadCount() const;
+    std::size_t getThreadPoolActiveThreadCount() const;
 
 private:
     friend class TcpConnection;

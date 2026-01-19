@@ -4,7 +4,7 @@
 #include <csignal>
 #include <memory>
 
-std::unique_ptr<ChatRoomServer> g_server;
+ChatRoomServer* g_server = nullptr;
 
 void signalHandler(int signum) {
     LOG_INFO("收到信号 {}, 正在关闭服务器...", signum);
@@ -29,8 +29,10 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
     
     try {
-        g_server = std::make_unique<ChatRoomServer>(port);
-        g_server->start();
+        ChatRoomServer server(port);
+        g_server = &server;
+        server.start();
+        g_server = nullptr;
     } catch (const std::exception& e) {
         LOG_ERROR("服务器异常: {}", e.what());
         return 1;
