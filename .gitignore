@@ -31,3 +31,6 @@ Testing/
 # 日志和打包输出
 logs/*
 dist/*
+
+# Clangd cache
+.cache/
