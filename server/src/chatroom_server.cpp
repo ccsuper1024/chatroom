@@ -248,6 +248,7 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
         {
             std::lock_guard<std::mutex> lock(messages_mutex_);
             messages_.push_back(msg);
+            LOG_INFO("Message stored. Total messages: {}, base_index: {}", messages_.size(), base_message_index_);
             if (messages_.size() > MAX_MESSAGE_HISTORY) {
                 messages_.pop_front();
                 ++base_message_index_;
@@ -276,9 +277,7 @@ HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
     HttpResponse response;
     
     try {
-        (void)request;
-        // 从查询参数获取起始位置（简化版本，这里假设从0开始）
-        size_t start = 0;
+        size_t since_idx = parseSinceParam(request.path);
         
         json resp_json;
         resp_json["success"] = true;
@@ -286,13 +285,30 @@ HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
         
         {
             std::lock_guard<std::mutex> lock(messages_mutex_);
-            for (size_t i = start; i < messages_.size(); ++i) {
+            LOG_INFO("Handling GetMessages. since={}, base_index={}, total_msgs={}", since_idx, base_message_index_, messages_.size());
+            // 客户端请求 since_idx 之后的消息
+            // 我们当前的消息范围是 [base_message_index_, base_message_index_ + messages_.size())
+            
+            // 计算在 messages_ deque 中的起始下标
+            size_t start_in_deque = 0;
+            if (since_idx >= base_message_index_) {
+                start_in_deque = since_idx - base_message_index_;
+            } else {
+                // 如果请求的 since_idx 小于 base_message_index_，
+                // 说明客户端落后太多（消息已被淘汰），或者客户端是新来的（since=0）
+                // 我们从头开始返回
+                start_in_deque = 0;
+            }
+
+            for (size_t i = start_in_deque; i < messages_.size(); ++i) {
                 json msg_json;
                 msg_json["username"] = messages_[i].username;
                 msg_json["content"] = messages_[i].content;
                 msg_json["timestamp"] = messages_[i].timestamp;
                 resp_json["messages"].push_back(msg_json);
             }
+            // 返回当前的总消息数，以便客户端下次可以正确请求增量
+            resp_json["total_count"] = base_message_index_ + messages_.size();
         }
         
         response.body = resp_json.dump();

@@ -23,14 +23,4 @@ target_link_libraries(chatroom_server
     PRIVATE pthread
 )
 
-# 测试
-add_executable(chatroom_test
-    tests/chatroom_test.cpp
-)
-target_link_libraries(chatroom_test
-    PRIVATE chatroom_server_lib
-    PRIVATE GTest::gtest_main
-)
 
-include(GoogleTest)
-gtest_discover_tests(chatroom_test)

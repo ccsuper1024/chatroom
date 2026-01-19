@@ -151,7 +151,14 @@ void HttpServer::handleHttpRequest(int fd, const HttpRequest& request) {
     HttpRequest request_copy = request;
     thread_pool_->post([this, request_fd, request_copy]() {
         HttpResponse response;
-        auto it_handler = handlers_.find(request_copy.path);
+        
+        std::string path = request_copy.path;
+        size_t q_pos = path.find('?');
+        if (q_pos != std::string::npos) {
+            path = path.substr(0, q_pos);
+        }
+
+        auto it_handler = handlers_.find(path);
         if (it_handler != handlers_.end()) {
             response = it_handler->second(request_copy);
         } else {

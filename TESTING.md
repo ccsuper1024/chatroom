@@ -19,15 +19,25 @@ cmake ..
 make -j$(nproc)
 ```
 
-## 2. 单元测试
+## 2. 单元测试与集成测试
 
-服务器端集成了基于 gtest 的单元测试（目标：`chatroom_test`）。
+项目包含独立的测试模块，分为单元测试和集成测试。
 
 在 `chatroom/` 目录下执行：
 
 ```bash
 cd chatroom/build
-ctest        # 或直接 ./server/chatroom_test
+ctest --output-on-failure
+```
+
+或者直接运行测试可执行文件：
+
+```bash
+# 运行单元测试
+./tests/unit_tests
+
+# 运行集成测试
+./tests/integration_tests
 ```
 
 如果你使用 IDE 或 CMake GUI，也可以通过相应的测试入口运行 `chatroom_test`。

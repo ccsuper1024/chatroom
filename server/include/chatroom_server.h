@@ -3,6 +3,7 @@
 #include "http_server.h"
 #include <string>
 #include <vector>
+#include <deque>
 #include <mutex>
 #include <memory>
 #include <unordered_map>
@@ -34,7 +35,8 @@ public:
 
 private:
     std::unique_ptr<HttpServer> http_server_;
-    std::vector<ChatMessage> messages_;  // 消息历史
+    std::deque<ChatMessage> messages_;  // 消息历史
+    std::size_t base_message_index_;    // 历史消息的起始索引
     std::mutex messages_mutex_;          // 保护消息列表的互斥锁
     
     struct UserSession {

@@ -20,11 +20,10 @@ TEST(ChatRoomTest, TimestampFormat) {
 }
 
 // 简单的集成测试
-TEST(ChatRoomTest, BasicIntegration) {
-    // 在实际应用中，这里可以启动服务器并测试端到端的功能
-    // 由于需要多线程和网络操作，这里简化为基本检查
-    EXPECT_TRUE(true);
-}
+// 此测试将被移至独立集成测试文件，此处保留单元测试
+// TEST(ChatRoomTest, BasicIntegration) {
+//     EXPECT_TRUE(true);
+// }
 
 int main(int argc, char **argv) {
     testing::InitGoogleTest(&argc, argv);
