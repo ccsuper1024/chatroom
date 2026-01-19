@@ -9,10 +9,11 @@ class Channel;
 
 class TcpConnection {
 public:
-    TcpConnection(HttpServer* server, EventLoop* loop, int fd);
+    TcpConnection(HttpServer* server, EventLoop* loop, int fd, const std::string& ip);
     ~TcpConnection();
 
     int fd() const;
+    std::string ip() const { return ip_; }
     bool closed() const;
 
     void handleRead();
@@ -26,6 +27,7 @@ private:
     HttpServer* server_;
     EventLoop* loop_;
     int fd_;
+    std::string ip_;
     bool closed_;
     std::string read_buffer_;
     std::string write_buffer_;

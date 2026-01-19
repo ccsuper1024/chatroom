@@ -1,13 +1,14 @@
 #pragma once
 
 #include <functional>
+#include <string>
 
 class EventLoop;
 class Channel;
 
 class Acceptor {
 public:
-    using NewConnectionCallback = std::function<void(int)>;
+    using NewConnectionCallback = std::function<void(int, const std::string&)>;
 
     Acceptor(EventLoop* loop, int port);
     ~Acceptor();

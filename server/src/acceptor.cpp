@@ -10,6 +10,8 @@
 #include <fcntl.h>
 #include <errno.h>
 
+#include <arpa/inet.h>
+
 Acceptor::Acceptor(EventLoop* loop, int port)
     : loop_(loop),
       listen_fd_(-1),
@@ -102,8 +104,14 @@ void Acceptor::handleRead() {
             LOG_ERROR("接受连接失败");
             break;
         }
+        // 设置非阻塞
+        int flags = ::fcntl(client_fd, F_GETFL, 0);
+        ::fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+
         if (callback_) {
-            callback_(client_fd);
+            char ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &(client_addr.sin_addr), ip, INET_ADDRSTRLEN);
+            callback_(client_fd, std::string(ip));
         } else {
             ::close(client_fd);
         }

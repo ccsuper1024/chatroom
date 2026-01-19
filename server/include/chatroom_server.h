@@ -74,4 +74,16 @@ private:
     HttpResponse handleHeartbeat(const HttpRequest& request);
     
     void cleanupInactiveSessions();
+    
+    // 安全与限流
+    struct RateLimitEntry {
+        int count;
+        std::chrono::steady_clock::time_point reset_time;
+    };
+    std::unordered_map<std::string, RateLimitEntry> rate_limits_;
+    std::mutex rate_limit_mutex_;
+    
+    bool checkRateLimit(const std::string& ip);
+    bool validateUsername(const std::string& username);
+    bool validateMessage(const std::string& content);
 };

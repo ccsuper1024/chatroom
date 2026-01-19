@@ -9,10 +9,11 @@
 #include <unistd.h>
 #include <errno.h>
 
-TcpConnection::TcpConnection(HttpServer* server, EventLoop* loop, int fd)
+TcpConnection::TcpConnection(HttpServer* server, EventLoop* loop, int fd, const std::string& ip)
     : server_(server),
       loop_(loop),
       fd_(fd),
+      ip_(ip),
       closed_(false) {
     auto ch = std::make_unique<Channel>(loop_, fd_);
     ch->setEvents(EPOLLIN | EPOLLET);
@@ -51,6 +52,17 @@ void TcpConnection::handleRead() {
         ssize_t n = ::recv(fd_, buffer, sizeof(buffer), 0);
         if (n > 0) {
             read_buffer_.append(buffer, static_cast<std::size_t>(n));
+            // 限制请求体大小，防止内存耗尽 (10MB)
+            if (read_buffer_.size() > 10 * 1024 * 1024) {
+                HttpResponse resp;
+                resp.status_code = 413;
+                resp.status_text = "Payload Too Large";
+                resp.body = R"({"error":"request entity too large"})";
+                std::string resp_str = buildResponse(resp);
+                appendResponse(resp_str);
+                server_->closeConnection(fd_);
+                return;
+            }
         } else if (n == 0) {
             server_->closeConnection(fd_);
             return;
@@ -83,6 +95,7 @@ void TcpConnection::handleRead() {
             break;
         }
 
+        req.remote_ip = ip_;
         server_->handleHttpRequest(fd_, req);
     }
 }

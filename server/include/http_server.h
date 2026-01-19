@@ -66,7 +66,7 @@ private:
     std::vector<PendingResponse> pending_responses_;
     
     void handleHttpRequest(int fd, const HttpRequest& request);
-    void newConnection(int fd);
+    void newConnection(int fd, const std::string& ip);
     void closeConnection(int fd);
     void processPendingResponses();
     

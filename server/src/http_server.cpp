@@ -121,8 +121,8 @@ void HttpServer::start() {
         return;
     }
 
-    acceptor_->setNewConnectionCallback([this](int client_fd) {
-        newConnection(client_fd);
+    acceptor_->setNewConnectionCallback([this](int client_fd, const std::string& ip) {
+        newConnection(client_fd, ip);
     });
 
     running_ = true;
@@ -215,7 +215,7 @@ void HttpServer::handleHttpRequest(int fd, const HttpRequest& request) {
     }
 }
 
-void HttpServer::newConnection(int fd) {
+void HttpServer::newConnection(int fd, const std::string& ip) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) {
         close(fd);
@@ -253,9 +253,9 @@ void HttpServer::newConnection(int fd) {
     setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
 #endif
 
-    auto conn = std::make_unique<TcpConnection>(this, &loop_, fd);
+    auto conn = std::make_unique<TcpConnection>(this, &loop_, fd, ip);
     connections_[fd] = std::move(conn);
-    LOG_INFO("新连接建立, fd={}", fd);
+    LOG_INFO("新连接建立, fd={}, ip={}", fd, ip);
 }
 
 void HttpServer::closeConnection(int fd) {

@@ -7,6 +7,7 @@ struct HttpRequest {
     std::string path;
     std::string body;
     std::string content_type;
+    std::string remote_ip;
 };
 
 struct HttpResponse {

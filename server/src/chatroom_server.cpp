@@ -14,17 +14,43 @@ static constexpr int HEARTBEAT_TIMEOUT_SECONDS = 60;
 static constexpr int SESSION_CLEANUP_INTERVAL_SECONDS = 30;
 static constexpr std::size_t MAX_MESSAGE_HISTORY = 1000;
 
-static bool isValidUsername(const std::string& name) {
-    if (name.empty()) {
+bool ChatRoomServer::checkRateLimit(const std::string& ip) {
+    if (ip.empty()) {
+        LOG_WARN("Rate limit check skipped for empty IP");
+        return true; 
+    }
+    std::lock_guard<std::mutex> lock(rate_limit_mutex_);
+    auto now = std::chrono::steady_clock::now();
+    auto& entry = rate_limits_[ip];
+    
+    if (entry.reset_time < now) {
+        entry.count = 0;
+        entry.reset_time = now + std::chrono::minutes(1);
+    }
+    
+    // LOG_INFO("Rate limit check: IP={}, count={}", ip, entry.count);
+
+    if (entry.count >= 60) {
+        LOG_WARN("IP {} rate limited", ip);
         return false;
     }
-    if (name.size() > 32) {
-        return false;
+    
+    entry.count++;
+    return true;
+}
+
+bool ChatRoomServer::validateUsername(const std::string& username) {
+    if (username.empty() || username.length() > 32) return false;
+    for (char c : username) {
+        if (!isalnum(c) && c != '_') return false;
     }
-    for (unsigned char c : name) {
-        if (c < 32 || c == 127) {
-            return false;
-        }
+    return true;
+}
+
+bool ChatRoomServer::validateMessage(const std::string& content) {
+    if (content.empty() || content.length() > 1024) return false;
+    for (char c : content) {
+        if (iscntrl(c) && c != '\n' && c != '\t') return false;
     }
     return true;
 }
@@ -107,53 +133,68 @@ void ChatRoomServer::start() {
 
 HttpResponse ChatRoomServer::handleMetrics(const HttpRequest& request) {
     HttpResponse resp;
-    json body;
-    (void)request;
-    body["success"] = true;
-    {
-        std::lock_guard<std::mutex> lock(messages_mutex_);
-        body["message_count"] = messages_.size();
-    }
-    {
-        std::lock_guard<std::mutex> lock(sessions_mutex_);
-        body["session_count"] = sessions_.size();
-        using namespace std::chrono;
-        auto now = system_clock::now();
-        std::size_t active = 0;
-        std::map<std::string, std::size_t> version_counts;
-        for (const auto& kv : sessions_) {
-            const auto& s = kv.second;
-            auto diff = duration_cast<seconds>(now - s.last_heartbeat).count();
-            bool is_active = diff <= HEARTBEAT_TIMEOUT_SECONDS;
-            if (is_active) {
-                ++active;
-            }
-            if (!s.client_version.empty()) {
-                ++version_counts[s.client_version];
-            }
-        }
-        body["active_session_count"] = active;
-        json versions_json;
-        for (const auto& kv : version_counts) {
-            versions_json[kv.first] = kv.second;
-        }
-        body["client_versions"] = versions_json;
-        if (start_time_.time_since_epoch().count() > 0) {
-            auto uptime = duration_cast<seconds>(now - start_time_).count();
-            body["uptime_seconds"] = uptime;
-        } else {
-            body["uptime_seconds"] = 0;
-        }
+
+    if (!checkRateLimit(request.remote_ip)) {
+        resp.status_code = 429;
+        resp.status_text = "Too Many Requests";
+        resp.body = R"({"error": "Too Many Requests"})";
+        return resp;
     }
 
-    // Thread pool metrics
-    body["thread_pool_queue_size"] = http_server_->getThreadPoolQueueSize();
-    body["thread_pool_rejected_count"] = http_server_->getThreadPoolRejectedCount();
-    body["thread_pool_thread_count"] = http_server_->getThreadPoolThreadCount();
-    body["thread_pool_active_thread_count"] = http_server_->getThreadPoolActiveThreadCount();
+    try {
+        json body;
+        (void)request;
+        body["success"] = true;
+        {
+            std::lock_guard<std::mutex> lock(messages_mutex_);
+            body["message_count"] = messages_.size();
+        }
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            body["session_count"] = sessions_.size();
+            using namespace std::chrono;
+            auto now = system_clock::now();
+            std::size_t active = 0;
+            std::map<std::string, std::size_t> version_counts;
+            for (const auto& kv : sessions_) {
+                const auto& s = kv.second;
+                auto diff = duration_cast<seconds>(now - s.last_heartbeat).count();
+                bool is_active = diff <= HEARTBEAT_TIMEOUT_SECONDS;
+                if (is_active) {
+                    ++active;
+                }
+                if (!s.client_version.empty()) {
+                    ++version_counts[s.client_version];
+                }
+            }
+            body["active_session_count"] = active;
+            json versions_json;
+            for (const auto& kv : version_counts) {
+                versions_json[kv.first] = kv.second;
+            }
+            body["client_versions"] = versions_json;
+            if (start_time_.time_since_epoch().count() > 0) {
+                auto uptime = duration_cast<seconds>(now - start_time_).count();
+                body["uptime_seconds"] = uptime;
+            } else {
+                body["uptime_seconds"] = 0;
+            }
+        }
 
-    body["timestamp"] = getCurrentTimestamp();
-    resp.body = body.dump();
+        // Thread pool metrics
+        body["thread_pool_queue_size"] = http_server_->getThreadPoolQueueSize();
+        body["thread_pool_rejected_count"] = http_server_->getThreadPoolRejectedCount();
+        body["thread_pool_thread_count"] = http_server_->getThreadPoolThreadCount();
+        body["thread_pool_active_thread_count"] = http_server_->getThreadPoolActiveThreadCount();
+
+        body["timestamp"] = getCurrentTimestamp();
+        resp.body = body.dump();
+    } catch (const std::exception& e) {
+        LOG_ERROR("处理 Metrics 请求失败: {}", e.what());
+        resp.status_code = 500;
+        resp.status_text = "Internal Server Error";
+        resp.body = R"({"error": "Internal Server Error"})";
+    }
     return resp;
 }
 
@@ -169,16 +210,23 @@ void ChatRoomServer::stop() {
 
 HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
     HttpResponse response;
+
+    if (!checkRateLimit(request.remote_ip)) {
+        response.status_code = 429;
+        response.status_text = "Too Many Requests";
+        response.body = R"({"error": "Too Many Requests"})";
+        return response;
+    }
     
         try {
         auto req_json = json::parse(request.body);
         std::string username = req_json.value("username", "");
-        if (!isValidUsername(username)) {
+        if (!validateUsername(username)) {
             response.status_code = 400;
             response.status_text = "Bad Request";
             json error_json;
             error_json["success"] = false;
-            error_json["error"] = "invalid username";
+            error_json["error"] = "invalid username (1-32 chars, alphanumeric and underscore only)";
             response.body = error_json.dump();
             return response;
         }
@@ -224,7 +272,7 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
         
         json error_json;
         error_json["success"] = false;
-        error_json["error"] = e.what();
+        error_json["error"] = "Invalid request format";
         response.body = error_json.dump();
     }
     
@@ -233,6 +281,13 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
 
 HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
     HttpResponse response;
+
+    if (!checkRateLimit(request.remote_ip)) {
+        response.status_code = 429;
+        response.status_text = "Too Many Requests";
+        response.body = R"({"error": "Too Many Requests"})";
+        return response;
+    }
     
     try {
         auto req_json = json::parse(request.body);
@@ -246,12 +301,21 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
                 username = it->second.username;
             }
         }
-        if (!isValidUsername(username) || content.empty()) {
+        if (!validateUsername(username)) {
             response.status_code = 400;
             response.status_text = "Bad Request";
             json error_json;
             error_json["success"] = false;
-            error_json["error"] = "invalid message";
+            error_json["error"] = "invalid username";
+            response.body = error_json.dump();
+            return response;
+        }
+        if (!validateMessage(content)) {
+            response.status_code = 400;
+            response.status_text = "Bad Request";
+            json error_json;
+            error_json["success"] = false;
+            error_json["error"] = "invalid message content (1-1024 chars, no control chars)";
             response.body = error_json.dump();
             return response;
         }
@@ -280,7 +344,7 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
         
         json error_json;
         error_json["success"] = false;
-        error_json["error"] = e.what();
+        error_json["error"] = "Invalid request format";
         response.body = error_json.dump();
     }
     
@@ -289,6 +353,13 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
 
 HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
     HttpResponse response;
+
+    if (!checkRateLimit(request.remote_ip)) {
+        response.status_code = 429;
+        response.status_text = "Too Many Requests";
+        response.body = R"({"error": "Too Many Requests"})";
+        return response;
+    }
     
     try {
         size_t since_idx = parseSinceParam(request.path);
@@ -333,7 +404,7 @@ HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
         
         json error_json;
         error_json["success"] = false;
-        error_json["error"] = e.what();
+        error_json["error"] = "Internal Server Error";
         response.body = error_json.dump();
     }
     
@@ -342,32 +413,46 @@ HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
 
 HttpResponse ChatRoomServer::handleGetUsers(const HttpRequest& request) {
     HttpResponse response;
-    
-    json resp_json;
-    (void)request;
-    resp_json["success"] = true;
-    resp_json["users"] = json::array();
-    
-    {
-        std::lock_guard<std::mutex> lock(sessions_mutex_);
-        using namespace std::chrono;
-        auto now = system_clock::now();
-        for (const auto& kv : sessions_) {
-            const UserSession& s = kv.second;
-            json u;
-            u["username"] = s.username;
-            u["connection_id"] = s.connection_id;
-            u["client_version"] = s.client_version;
-            auto diff = duration_cast<seconds>(now - s.last_heartbeat).count();
-            bool is_active = diff <= HEARTBEAT_TIMEOUT_SECONDS;
-            u["online"] = is_active;
-            u["idle_seconds"] = diff;
-            u["last_heartbeat"] = formatTimestamp(s.last_heartbeat);
-            resp_json["users"].push_back(u);
-        }
+
+    if (!checkRateLimit(request.remote_ip)) {
+        response.status_code = 429;
+        response.status_text = "Too Many Requests";
+        response.body = R"({"error": "Too Many Requests"})";
+        return response;
     }
     
-    response.body = resp_json.dump();
+    try {
+        json resp_json;
+        (void)request;
+        resp_json["success"] = true;
+        resp_json["users"] = json::array();
+        
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            using namespace std::chrono;
+            auto now = system_clock::now();
+            for (const auto& kv : sessions_) {
+                const UserSession& s = kv.second;
+                json u;
+                u["username"] = s.username;
+                u["connection_id"] = s.connection_id;
+                u["client_version"] = s.client_version;
+                auto diff = duration_cast<seconds>(now - s.last_heartbeat).count();
+                bool is_active = diff <= HEARTBEAT_TIMEOUT_SECONDS;
+                u["online"] = is_active;
+                u["idle_seconds"] = diff;
+                u["last_heartbeat"] = formatTimestamp(s.last_heartbeat);
+                resp_json["users"].push_back(u);
+            }
+        }
+        
+        response.body = resp_json.dump();
+    } catch (const std::exception& e) {
+        LOG_ERROR("处理获取用户列表请求失败: {}", e.what());
+        response.status_code = 500;
+        response.status_text = "Internal Server Error";
+        response.body = R"({"error": "Internal Server Error"})";
+    }
     
     return response;
 }
@@ -385,6 +470,14 @@ std::string ChatRoomServer::formatTimestamp(const std::chrono::system_clock::tim
 
 HttpResponse ChatRoomServer::handleHeartbeat(const HttpRequest& request) {
     HttpResponse response;
+
+    if (!checkRateLimit(request.remote_ip)) {
+        response.status_code = 429;
+        response.status_text = "Too Many Requests";
+        response.body = R"({"error": "Too Many Requests"})";
+        return response;
+    }
+
     try {
         auto req_json = json::parse(request.body);
         std::string username = req_json.value("username", "");
@@ -414,7 +507,7 @@ HttpResponse ChatRoomServer::handleHeartbeat(const HttpRequest& request) {
         response.status_text = "Bad Request";
         json error_json;
         error_json["success"] = false;
-        error_json["error"] = e.what();
+        error_json["error"] = "Invalid request format";
         response.body = error_json.dump();
     }
     return response;
