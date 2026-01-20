@@ -3,11 +3,14 @@
 #include "event_loop.h"
 #include "channel.h"
 #include "http_codec.h"
+#include "server_error.h"
 
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <errno.h>
+
+static constexpr size_t kMaxRequestSize = 10 * 1024 * 1024;
 
 TcpConnection::TcpConnection(HttpServer* server, EventLoop* loop, int fd, const std::string& ip)
     : server_(server),
@@ -52,15 +55,11 @@ void TcpConnection::handleRead() {
         ssize_t n = ::recv(fd_, buffer, sizeof(buffer), 0);
         if (n > 0) {
             read_buffer_.append(buffer, static_cast<std::size_t>(n));
-            // 限制请求体大小，防止内存耗尽 (10MB)
-            if (read_buffer_.size() > 10 * 1024 * 1024) {
-                HttpResponse resp;
-                resp.status_code = 413;
-                resp.status_text = "Payload Too Large";
-                resp.body = R"({"error":"request entity too large"})";
+            if (read_buffer_.size() > kMaxRequestSize) {
+                HttpResponse resp = CreateErrorResponse(ErrorCode::PAYLOAD_TOO_LARGE);
                 std::string resp_str = buildResponse(resp);
                 appendResponse(resp_str);
-                server_->closeConnection(fd_);
+                setCloseAfterWrite(true);
                 return;
             }
         } else if (n == 0) {
@@ -82,12 +81,10 @@ void TcpConnection::handleRead() {
         bool bad = false;
         HttpRequest req = parseRequestFromBuffer(read_buffer_, complete, bad);
         if (bad) {
-            HttpResponse resp;
-            resp.status_code = 400;
-            resp.status_text = "Bad Request";
-            resp.body = R"({"error":"bad request"})";
+            HttpResponse resp = CreateErrorResponse(ErrorCode::INVALID_REQUEST);
             std::string resp_str = buildResponse(resp);
             appendResponse(resp_str);
+            setCloseAfterWrite(true);
             break;
         }
         if (!complete) {
@@ -120,6 +117,12 @@ void TcpConnection::handleWrite() {
             }
         }
     }
+
+    if (write_buffer_.empty() && close_after_write_) {
+        server_->closeConnection(fd_);
+        return;
+    }
+
     if (channel_) {
         uint32_t new_events = EPOLLIN | EPOLLET;
         if (!write_buffer_.empty()) {

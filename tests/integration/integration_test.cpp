@@ -7,6 +7,50 @@
 #include <vector>
 #include <filesystem>
 #include <atomic>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+
+// Helper to send raw data
+std::string SendRaw(int port, const std::string& data) {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return "";
+    
+    struct sockaddr_in serv_addr;
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(port);
+    inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr);
+    
+    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        close(sock);
+        return "";
+    }
+    
+    size_t total_sent = 0;
+    while (total_sent < data.size()) {
+        ssize_t sent = send(sock, data.c_str() + total_sent, data.size() - total_sent, 0);
+        if (sent < 0) break;
+        total_sent += sent;
+    }
+    
+    // Shutdown write to signal end of request if needed, but for HTTP we usually rely on Content-Length
+    // shutdown(sock, SHUT_WR);
+    
+    char buffer[4096];
+    std::string response;
+    // Simple read with timeout
+    struct timeval tv;
+    tv.tv_sec = 2;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+
+    while (true) {
+        ssize_t n = recv(sock, buffer, sizeof(buffer), 0);
+        if (n <= 0) break;
+        response.append(buffer, n);
+    }
+    close(sock);
+    return response;
+}
 
 // 集成测试：测试完整的聊天流程
 TEST(IntegrationTest, ChatFlow) {
@@ -214,4 +258,43 @@ TEST(IntegrationTest, ConcurrencyTest) {
     
     // Restore config
     config.rate_limit.max_requests = original_limit;
+}
+
+// 安全与异常测试：畸形包、超大包等
+TEST(IntegrationTest, SecurityTest) {
+    const int TEST_PORT = 18085;
+    ChatRoomServer server(TEST_PORT);
+    std::thread server_thread([&server]() { server.start(); });
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    // 1. Malformed HTTP Request (Garbage)
+    {
+        std::string resp = SendRaw(TEST_PORT, "NOT_HTTP_REQUEST\r\n\r\n");
+        EXPECT_NE(resp.find("400 Error"), std::string::npos) << "Should return 400 status for garbage";
+        EXPECT_NE(resp.find("\"error_code\":1001"), std::string::npos) << "Should contain INVALID_REQUEST code";
+    }
+
+    // 2. Malformed JSON Body
+    {
+        std::string req = "POST /login HTTP/1.1\r\nContent-Length: 5\r\n\r\nHELLO";
+        std::string resp = SendRaw(TEST_PORT, req);
+        EXPECT_NE(resp.find("400 Error"), std::string::npos) << "Should return 400 status for bad json";
+        EXPECT_NE(resp.find("\"error_code\":1001"), std::string::npos) << "Should contain INVALID_REQUEST code";
+    }
+    
+    // 3. Payload Too Large (> 10MB)
+    {
+        // Allocate ~10.1MB
+        std::string huge(10 * 1024 * 1024 + 100 * 1024, 'X'); 
+        std::string resp = SendRaw(TEST_PORT, huge);
+        
+        // Expect 413
+        EXPECT_NE(resp.find("413 Error"), std::string::npos) << "Should return 413 status for huge payload";
+        EXPECT_NE(resp.find("\"error_code\":1006"), std::string::npos) << "Should contain PAYLOAD_TOO_LARGE code";
+    }
+
+    server.stop();
+    if (server_thread.joinable()) {
+        server_thread.join();
+    }
 }

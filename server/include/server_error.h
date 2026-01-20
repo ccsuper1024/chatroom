@@ -13,6 +13,7 @@ enum class ErrorCode {
     INVALID_MESSAGE = 1003,
     RATE_LIMITED = 1004,
     USERNAME_TAKEN = 1005,
+    PAYLOAD_TOO_LARGE = 1006,
     INTERNAL_ERROR = 5000,
     UNKNOWN_ERROR = 9999
 };
@@ -36,6 +37,8 @@ struct AppError {
                 return {ErrorCode::RATE_LIMITED, "Too Many Requests", 429};
             case ErrorCode::USERNAME_TAKEN:
                 return {ErrorCode::USERNAME_TAKEN, "Username already taken", 409};
+            case ErrorCode::PAYLOAD_TOO_LARGE:
+                return {ErrorCode::PAYLOAD_TOO_LARGE, "Request entity too large", 413};
             case ErrorCode::INTERNAL_ERROR:
                 return {ErrorCode::INTERNAL_ERROR, "Internal Server Error", 500};
             default:

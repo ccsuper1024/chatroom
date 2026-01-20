@@ -22,6 +22,7 @@ public:
 
     void appendResponse(const std::string& data);
     void shutdown();
+    void setCloseAfterWrite(bool close) { close_after_write_ = close; }
 
 private:
     HttpServer* server_;
@@ -29,6 +30,7 @@ private:
     int fd_;
     std::string ip_;
     bool closed_;
+    bool close_after_write_ = false;
     std::string read_buffer_;
     std::string write_buffer_;
     std::unique_ptr<Channel> channel_;

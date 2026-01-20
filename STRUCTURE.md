@@ -222,12 +222,10 @@ ctest --output-on-failure
     - 解析 `Content-Length`，循环 `recv` 直到接收完整 Body。
     - 支持自动重试机制。
 - HTTP 请求解析与防御
-  - **状态**: 部分实现
+  - **状态**: 已实现
   - **实现细节**:
-    - `TcpConnection` 限制了最大请求体大小 (10MB)。
-    - `parseRequestFromBuffer` 支持基本的 HTTP 解析。
-  - **可改进方向**:
-    - 对异常请求的错误信息做更精细分类。
+    - `TcpConnection` 限制了最大请求体大小 (10MB)，超限返回标准 JSON 错误 (413)。
+    - `parseRequestFromBuffer` 解析失败时返回标准 JSON 错误 (400)。
 - 连接重试策略
   - **状态**: 已实现
   - **实现细节**:
@@ -264,9 +262,10 @@ ctest --output-on-failure
     - 基于 IP 的限流 (`checkRateLimit`)。
     - 支持配置窗口时间和最大请求数。
 - 错误信息暴露
-  - **状态**: 部分实现
-  - **可改进方向**:
-    - 统一错误返回格式，便于客户端处理。
+  - **状态**: 已实现
+  - **实现细节**:
+    - 全局统一使用 `CreateErrorResponse` 生成错误响应。
+    - 即使是底层协议错误（如包过大、格式错误）也返回标准 JSON 格式。
 
 ### 5. 代码结构与测试
 
@@ -274,9 +273,9 @@ ctest --output-on-failure
   - **状态**: 已实现
   - **现状**:
     - `tests/unit/server_test.cpp` 覆盖了输入校验、限流等核心逻辑。
-    - `tests/integration/integration_test.cpp` 覆盖了基本聊天流程、消息持久化和**并发压力测试**。
+    - `tests/integration/integration_test.cpp` 覆盖了基本聊天流程、消息持久化、**并发压力测试**和**异常安全测试**。
   - **计划**:
-    - 增加更多异常场景测试。
+    - 持续补充边界用例。
 - 结构抽象
   - **状态**: 部分实现
   - **实现细节**:
@@ -326,4 +325,5 @@ ctest --output-on-failure
 - **协议健壮性**：客户端 `sendHttpRequest` 现在完整解析 `Content-Length` 并循环读取响应，解决了大包截断问题；增加了 5 秒接收超时设置。
 - **客户端交互**：新增 `/users`、`/stats`、`/help` 命令，支持 SIGINT 优雅退出。
 - **配置与运维**：完成配置集中化 (ServerConfig) 和日志可配置化。
-- **测试增强**：新增 `IntegrationTest.PersistenceTest` (持久化验证) 和 `IntegrationTest.ConcurrencyTest` (并发压力验证)。
+- **测试增强**：新增 `IntegrationTest.PersistenceTest` (持久化验证)、`IntegrationTest.ConcurrencyTest` (并发压力验证) 和 `IntegrationTest.SecurityTest` (异常安全验证)。
+- **错误处理统一**：底层协议错误（如包过大、格式错误）现在统一返回标准 JSON 错误格式，修复了直接断开连接导致客户端无法获取错误信息的问题。
