@@ -63,7 +63,18 @@ chatroom/
 - [nlohmann/json](https://github.com/nlohmann/json) - JSON解析库
 - [googletest](https://github.com/google/googletest) - 测试框架
 
-所有依赖库通过CMake的FetchContent自动下载。
+所有依赖库需要在编译前手动下载到 `third_party` 目录。
+
+> ⚠️ **重要提示**：由于 `third_party/` 目录被 `.gitignore` 忽略，拉取代码后必须手动下载以下依赖库的源码，并放置在正确的位置，否则无法编译。
+
+请确保项目根目录下的 `third_party` 目录结构如下：
+
+```text
+third_party/
+├── spdlog/      # git clone https://github.com/gabime/spdlog.git
+├── json/        # git clone https://github.com/nlohmann/json.git
+└── googletest/  # git clone https://github.com/google/googletest.git
+```
 
 ## 编译
 
