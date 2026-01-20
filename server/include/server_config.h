@@ -43,6 +43,7 @@ struct ServerConfig {
     
     // Limits
     std::size_t max_message_history = 1000;
+    std::string history_file_path = "data/chat_history.json";
     std::size_t max_message_length = 1024;
     std::size_t max_username_length = 32;
     RateLimitConfig rate_limit;

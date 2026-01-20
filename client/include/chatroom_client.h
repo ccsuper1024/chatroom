@@ -3,6 +3,12 @@
 #include <string>
 #include <vector>
 
+struct User {
+    std::string username;
+    long online_seconds;
+    long idle_seconds;
+};
+
 /**
  * 聊天室客户端
  */
@@ -20,7 +26,7 @@ public:
     std::vector<std::string> getMessages();
     
     // 获取在线用户列表
-    std::string getUsers();
+    std::vector<User> getUsers();
 
     // 获取服务器统计信息
     std::string getStats();

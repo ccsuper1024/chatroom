@@ -2,6 +2,7 @@
 #include "client_config.h"
 #include "stream_logger.h"
 #include <iostream>
+#include <iomanip>
 #include <thread>
 #include <atomic>
 #include <chrono>
@@ -99,8 +100,18 @@ int main(int argc, char* argv[]) {
                 } else if (input == "/help") {
                     printHelp();
                 } else if (input == "/users") {
-                    std::string users = client.getUsers();
-                    std::cout << "\n=== 在线用户 ===\n" << users << "\n================" << std::endl;
+                    auto users = client.getUsers();
+                    std::cout << "\n=== 在线用户 (" << users.size() << ") ===" << std::endl;
+                    std::cout << std::left << std::setw(20) << "用户名" 
+                              << std::setw(15) << "在线时长(s)" 
+                              << std::setw(15) << "空闲时长(s)" << std::endl;
+                    std::cout << std::string(50, '-') << std::endl;
+                    for (const auto& u : users) {
+                        std::cout << std::left << std::setw(20) << u.username 
+                                  << std::setw(15) << u.online_seconds 
+                                  << std::setw(15) << u.idle_seconds << std::endl;
+                    }
+                    std::cout << "===========================" << std::endl;
                 } else if (input == "/stats") {
                     std::string stats = client.getStats();
                     std::cout << "\n=== 服务器统计 ===\n" << stats << "\n==================" << std::endl;

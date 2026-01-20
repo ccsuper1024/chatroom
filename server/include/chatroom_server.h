@@ -50,6 +50,7 @@ private:
         std::string connection_id;
         std::string client_version;
         std::chrono::system_clock::time_point last_heartbeat;
+        std::chrono::system_clock::time_point login_time;
     };
     std::unordered_map<std::string, UserSession> sessions_;
     std::mutex sessions_mutex_;
@@ -90,4 +91,8 @@ private:
     bool checkRateLimit(const std::string& ip);
     bool validateUsername(const std::string& username);
     bool validateMessage(const std::string& content);
+
+    // Message Persistence
+    void loadMessages();
+    void saveMessages();
 };

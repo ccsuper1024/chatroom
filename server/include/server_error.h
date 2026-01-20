@@ -12,6 +12,7 @@ enum class ErrorCode {
     INVALID_USERNAME = 1002,
     INVALID_MESSAGE = 1003,
     RATE_LIMITED = 1004,
+    USERNAME_TAKEN = 1005,
     INTERNAL_ERROR = 5000,
     UNKNOWN_ERROR = 9999
 };
@@ -33,6 +34,8 @@ struct AppError {
                 return {ErrorCode::INVALID_MESSAGE, "Invalid message content (1-1024 chars, no control chars)", 400};
             case ErrorCode::RATE_LIMITED:
                 return {ErrorCode::RATE_LIMITED, "Too Many Requests", 429};
+            case ErrorCode::USERNAME_TAKEN:
+                return {ErrorCode::USERNAME_TAKEN, "Username already taken", 409};
             case ErrorCode::INTERNAL_ERROR:
                 return {ErrorCode::INTERNAL_ERROR, "Internal Server Error", 500};
             default:

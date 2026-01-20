@@ -45,6 +45,12 @@ void ChatRoomClient::connectToServer() {
     setsockopt(sock_fd_, IPPROTO_TCP, TCP_KEEPCNT, &keep_cnt, sizeof(keep_cnt));
 #endif
     
+    // 设置接收超时
+    struct timeval tv;
+    tv.tv_sec = 5;  // 5秒超时
+    tv.tv_usec = 0;
+    setsockopt(sock_fd_, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+    
     // 连接服务器
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
@@ -86,7 +92,8 @@ bool ChatRoomClient::login(const std::string& username) {
             LOG_INFO("登录成功: {}, connection_id={}", username_, connection_id_);
             return true;
         } else {
-            LOG_ERROR("登录失败");
+            std::string error_msg = resp_json.value("error", "Unknown error");
+            LOG_ERROR("登录失败: {}", error_msg);
             return false;
         }
     } catch (const std::exception& e) {
@@ -132,11 +139,13 @@ std::vector<std::string> ChatRoomClient::getMessages() {
                 }
                 
                 // 更新本地消息计数
-                if (resp_json.contains("total_count")) {
+                if (resp_json.contains("next_since")) {
+                    last_message_count_ = resp_json["next_since"].get<size_t>();
+                } else if (resp_json.contains("total_count")) {
                     last_message_count_ = resp_json["total_count"].get<size_t>();
                 } else {
                     // 兼容旧服务端（如果有的话，但我们已经改了服务端）
-                    // 如果没有 total_count，可能是全量返回，我们需要一种保守策略
+                    // 如果没有 next_since/total_count，可能是全量返回，我们需要一种保守策略
                     // 但这里我们假设是配套升级的。
                     last_message_count_ += messages.size();
                 }
@@ -151,13 +160,25 @@ std::vector<std::string> ChatRoomClient::getMessages() {
     return new_messages;
 }
 
-std::string ChatRoomClient::getUsers() {
+std::vector<User> ChatRoomClient::getUsers() {
+    std::vector<User> users;
     try {
-        return sendHttpRequest("GET", "/users");
+        std::string response = sendHttpRequest("GET", "/users");
+        auto resp_json = json::parse(response);
+        
+        if (resp_json.contains("users") && resp_json["users"].is_array()) {
+            for (const auto& u : resp_json["users"]) {
+                User user;
+                user.username = u.value("username", "unknown");
+                user.online_seconds = u.value("online_seconds", 0L);
+                user.idle_seconds = u.value("idle_seconds", 0L);
+                users.push_back(user);
+            }
+        }
     } catch (const std::exception& e) {
         LOG_ERROR("获取用户列表失败: {}", e.what());
-        return "{\"error\": \"获取用户列表失败\"}";
     }
+    return users;
 }
 
 std::string ChatRoomClient::getStats() {
@@ -233,11 +254,56 @@ std::string ChatRoomClient::sendHttpRequest(const std::string& method,
 
     auto recv_with_retry = [&]() -> std::string {
         for (int attempt = 0; attempt <= cfg.max_retries; ++attempt) {
-            char buffer[4096] = {0};
-            ssize_t bytes_read = recv(sock_fd_, buffer, sizeof(buffer) - 1, 0);
-            if (bytes_read > 0) {
-                return std::string(buffer, bytes_read);
+            std::string response_buffer;
+            size_t header_end = std::string::npos;
+            size_t content_length = 0;
+            bool header_parsed = false;
+            
+            while (true) {
+                char buffer[4096];
+                ssize_t bytes_read = recv(sock_fd_, buffer, sizeof(buffer), 0);
+                
+                if (bytes_read < 0) {
+                    if (errno == EINTR) continue;
+                    LOG_WARN("接收出错或超时: {}", strerror(errno));
+                    break;
+                }
+                if (bytes_read == 0) {
+                    LOG_WARN("服务器关闭连接");
+                    break;
+                }
+                
+                response_buffer.append(buffer, bytes_read);
+                
+                if (!header_parsed) {
+                    header_end = response_buffer.find("\r\n\r\n");
+                    if (header_end != std::string::npos) {
+                        std::string header = response_buffer.substr(0, header_end);
+                        size_t key_pos = header.find("Content-Length:");
+                        if (key_pos != std::string::npos) {
+                            size_t val_start = key_pos + 15;
+                            size_t val_end = header.find("\r\n", val_start);
+                            if (val_end != std::string::npos) {
+                                std::string val = header.substr(val_start, val_end - val_start);
+                                try {
+                                    content_length = std::stoull(val);
+                                } catch (...) {
+                                    content_length = 0;
+                                }
+                            }
+                        }
+                        header_parsed = true;
+                    }
+                }
+                
+                if (header_parsed) {
+                    size_t total_needed = header_end + 4 + content_length;
+                    if (response_buffer.size() >= total_needed) {
+                        return response_buffer;
+                    }
+                }
             }
+
             LOG_WARN("接收失败，尝试重连..., attempt={}", attempt + 1);
             closeConnection();
             try {

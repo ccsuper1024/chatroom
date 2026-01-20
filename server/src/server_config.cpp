@@ -80,8 +80,10 @@ bool ServerConfig::load(const std::string& config_file) {
             } else if (key == "session_cleanup_interval_seconds") {
                 session_cleanup_interval_seconds = std::stoi(value);
             } else if (key == "max_message_history") {
-                max_message_history = std::stoul(value);
-            } else if (key == "max_message_length") {
+            max_message_history = std::stoul(value);
+        } else if (key == "history_file_path") {
+            history_file_path = value;
+        } else if (key == "max_message_length") {
                 max_message_length = std::stoul(value);
             } else if (key == "rate_limit_enabled") {
                 rate_limit.enabled = parseBool(value);

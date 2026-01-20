@@ -8,6 +8,8 @@
 #include <atomic>
 #include <thread>
 #include <map>
+#include <fstream>
+#include <filesystem>
 
 static std::atomic<unsigned long long> g_connection_counter{0};
 
@@ -124,6 +126,7 @@ ChatRoomServer::ChatRoomServer(int port)
 
 void ChatRoomServer::start() {
     LOG_INFO("聊天室服务器启动");
+    loadMessages();
     start_time_ = std::chrono::system_clock::now();
     running_.store(true);
     cleanup_thread_ = std::thread([this]() { cleanupInactiveSessions(); });
@@ -132,74 +135,6 @@ void ChatRoomServer::start() {
     if (cleanup_thread_.joinable()) {
         cleanup_thread_.join();
     }
-}
-
-HttpResponse ChatRoomServer::handleMetrics(const HttpRequest& request) {
-    if (!checkRateLimit(request.remote_ip)) {
-        return CreateErrorResponse(ErrorCode::RATE_LIMITED);
-    }
-
-    try {
-        json body = metrics_collector_->getMetrics();
-        body["success"] = true;
-
-        {
-            std::lock_guard<std::mutex> lock(messages_mutex_);
-            body["message_count"] = messages_.size();
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(sessions_mutex_);
-            body["session_count"] = sessions_.size();
-            using namespace std::chrono;
-            auto now = system_clock::now();
-            std::size_t active = 0;
-            std::map<std::string, std::size_t> version_counts;
-            int timeout = ServerConfig::instance().heartbeat_timeout_seconds;
-            for (const auto& kv : sessions_) {
-                const auto& s = kv.second;
-                auto diff = duration_cast<seconds>(now - s.last_heartbeat).count();
-                bool is_active = diff <= timeout;
-                if (is_active) {
-                    ++active;
-                }
-                if (!s.client_version.empty()) {
-                    ++version_counts[s.client_version];
-                }
-            }
-            body["active_session_count"] = active;
-            metrics_collector_->updateActiveSessions(active);
-            
-            json versions_json;
-            for (const auto& kv : version_counts) {
-                versions_json[kv.first] = kv.second;
-            }
-            body["client_versions"] = versions_json;
-        }
-
-        // Thread pool metrics
-        body["thread_pool_queue_size"] = http_server_->getThreadPoolQueueSize();
-        body["thread_pool_rejected_count"] = http_server_->getThreadPoolRejectedCount();
-        body["thread_pool_thread_count"] = http_server_->getThreadPoolThreadCount();
-        body["thread_pool_active_thread_count"] = http_server_->getThreadPoolActiveThreadCount();
-
-        HttpResponse resp;
-        resp.body = body.dump();
-        return resp;
-    } catch (const std::exception& e) {
-        LOG_ERROR("处理 Metrics 请求失败: {}", e.what());
-        return CreateErrorResponse(ErrorCode::INTERNAL_ERROR);
-    }
-}
-
-void ChatRoomServer::stop() {
-    LOG_INFO("聊天室服务器停止");
-    running_ = false;
-    cleanup_cv_.notify_all();
-    if (cleanup_thread_.joinable()) {
-        cleanup_thread_.join();
-    }
-    http_server_->stop();
 }
 
 HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
@@ -212,28 +147,35 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
     try {
         auto req_json = json::parse(request.body);
         std::string username = req_json.value("username", "");
-        
         if (!validateUsername(username)) {
             return CreateErrorResponse(ErrorCode::INVALID_USERNAME);
         }
         
-        std::string conn_id = generateConnectionId();
+        std::string connection_id = generateConnectionId();
         
         {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
+            // Check if username is already taken
+            for (const auto& kv : sessions_) {
+                if (kv.second.username == username) {
+                    return CreateErrorResponse(ErrorCode::USERNAME_TAKEN);
+                }
+            }
+
             UserSession session;
-            session.connection_id = conn_id;
             session.username = username;
+            session.connection_id = connection_id;
             session.last_heartbeat = std::chrono::system_clock::now();
-            sessions_[conn_id] = session;
+            session.login_time = session.last_heartbeat;
+            sessions_[connection_id] = session;
+            metrics_collector_->updateActiveSessions(sessions_.size());
         }
         
-        LOG_INFO("用户登录: {} ({})", username, conn_id);
+        LOG_INFO("用户登录: {} (conn_id={})", username, connection_id);
         
         json resp_json;
         resp_json["success"] = true;
-        resp_json["connection_id"] = conn_id;
-        resp_json["message"] = "Login successful";
+        resp_json["connection_id"] = connection_id;
         
         HttpResponse response;
         response.body = resp_json.dump();
@@ -242,6 +184,46 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
         LOG_ERROR("处理登录请求失败: {}", e.what());
         metrics_collector_->recordError("login_error");
         return CreateErrorResponse(ErrorCode::INVALID_REQUEST);
+    }
+}
+
+HttpResponse ChatRoomServer::handleGetUsers(const HttpRequest& request) {
+    metrics_collector_->recordRequest("GET", "/users");
+    
+    if (!checkRateLimit(request.remote_ip)) {
+        return CreateErrorResponse(ErrorCode::RATE_LIMITED);
+    }
+
+    try {
+        json resp_json;
+        resp_json["success"] = true;
+        resp_json["users"] = json::array();
+        
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            auto now = std::chrono::system_clock::now();
+            for (const auto& pair : sessions_) {
+                json user;
+                user["username"] = pair.second.username;
+                // user["connection_id"] = pair.second.connection_id; // Optional
+                
+                auto idle_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - pair.second.last_heartbeat).count();
+                auto online_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - pair.second.login_time).count();
+                
+                user["idle_seconds"] = idle_ms / 1000;
+                user["online_seconds"] = online_ms / 1000;
+                
+                resp_json["users"].push_back(user);
+            }
+        }
+        
+        HttpResponse response;
+        response.body = resp_json.dump();
+        return response;
+    } catch (const std::exception& e) {
+        LOG_ERROR("处理获取用户列表失败: {}", e.what());
+        metrics_collector_->recordError("get_users_error");
+        return CreateErrorResponse(ErrorCode::INTERNAL_ERROR);
     }
 }
 
@@ -351,45 +333,6 @@ HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
     }
 }
 
-HttpResponse ChatRoomServer::handleGetUsers(const HttpRequest& request) {
-    metrics_collector_->recordRequest("GET", "/users");
-
-    if (!checkRateLimit(request.remote_ip)) {
-        return CreateErrorResponse(ErrorCode::RATE_LIMITED);
-    }
-
-    try {
-        json resp_json;
-        resp_json["success"] = true;
-        resp_json["users"] = json::array();
-        
-        {
-            std::lock_guard<std::mutex> lock(sessions_mutex_);
-            using namespace std::chrono;
-            auto now = system_clock::now();
-            int timeout = ServerConfig::instance().heartbeat_timeout_seconds;
-            for (const auto& kv : sessions_) {
-                auto diff = duration_cast<seconds>(now - kv.second.last_heartbeat).count();
-                if (diff <= timeout) {
-                    json user;
-                    user["username"] = kv.second.username;
-                    user["client_version"] = kv.second.client_version;
-                    user["idle_seconds"] = diff;
-                    resp_json["users"].push_back(user);
-                }
-            }
-        }
-        
-        HttpResponse response;
-        response.body = resp_json.dump();
-        return response;
-    } catch (const std::exception& e) {
-        LOG_ERROR("处理获取用户列表请求失败: {}", e.what());
-        metrics_collector_->recordError("get_users_error");
-        return CreateErrorResponse(ErrorCode::INTERNAL_ERROR);
-    }
-}
-
 std::string ChatRoomServer::getCurrentTimestamp() {
     return formatTimestamp(std::chrono::system_clock::now());
 }
@@ -419,7 +362,7 @@ HttpResponse ChatRoomServer::handleHeartbeat(const HttpRequest& request) {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
             auto it = sessions_.find(conn_id);
             if (it != sessions_.end()) {
-                it->second.username = username;
+                // Only update metadata, username is immutable
                 it->second.client_version = version;
                 it->second.last_heartbeat = std::chrono::system_clock::now();
             }
@@ -465,5 +408,138 @@ void ChatRoomServer::cleanupInactiveSessions() {
                 ++it;
             }
         }
+    }
+}
+
+HttpResponse ChatRoomServer::handleMetrics(const HttpRequest& request) {
+    if (!checkRateLimit(request.remote_ip)) {
+        return CreateErrorResponse(ErrorCode::RATE_LIMITED);
+    }
+
+    try {
+        json body = metrics_collector_->getMetrics();
+        body["success"] = true;
+
+        {
+            std::lock_guard<std::mutex> lock(messages_mutex_);
+            body["message_count"] = messages_.size();
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            body["session_count"] = sessions_.size();
+            using namespace std::chrono;
+            auto now = system_clock::now();
+            std::size_t active = 0;
+            std::map<std::string, std::size_t> version_counts;
+            int timeout = ServerConfig::instance().heartbeat_timeout_seconds;
+            for (const auto& kv : sessions_) {
+                const auto& s = kv.second;
+                auto diff = duration_cast<seconds>(now - s.last_heartbeat).count();
+                bool is_active = diff <= timeout;
+                if (is_active) {
+                    ++active;
+                }
+                if (!s.client_version.empty()) {
+                    ++version_counts[s.client_version];
+                }
+            }
+            body["active_session_count"] = active;
+            metrics_collector_->updateActiveSessions(active);
+            
+            json versions_json;
+            for (const auto& kv : version_counts) {
+                versions_json[kv.first] = kv.second;
+            }
+            body["client_versions"] = versions_json;
+        }
+
+        // Thread pool metrics
+        body["thread_pool_queue_size"] = http_server_->getThreadPoolQueueSize();
+        body["thread_pool_rejected_count"] = http_server_->getThreadPoolRejectedCount();
+        body["thread_pool_thread_count"] = http_server_->getThreadPoolThreadCount();
+        body["thread_pool_active_thread_count"] = http_server_->getThreadPoolActiveThreadCount();
+
+        HttpResponse resp;
+        resp.body = body.dump();
+        return resp;
+    } catch (const std::exception& e) {
+        LOG_ERROR("处理 Metrics 请求失败: {}", e.what());
+        return CreateErrorResponse(ErrorCode::INTERNAL_ERROR);
+    }
+}
+
+void ChatRoomServer::stop() {
+    LOG_INFO("聊天室服务器停止");
+    running_ = false;
+    cleanup_cv_.notify_all();
+    if (cleanup_thread_.joinable()) {
+        cleanup_thread_.join();
+    }
+    saveMessages();
+    http_server_->stop();
+}
+
+void ChatRoomServer::loadMessages() {
+    std::string file_path = ServerConfig::instance().history_file_path;
+    if (!std::filesystem::exists(file_path)) {
+        LOG_INFO("消息历史文件不存在，跳过加载: {}", file_path);
+        return;
+    }
+
+    try {
+        std::ifstream f(file_path);
+        json j;
+        f >> j;
+
+        if (j.contains("base_index")) {
+            base_message_index_ = j["base_index"];
+        }
+        if (j.contains("messages") && j["messages"].is_array()) {
+            std::lock_guard<std::mutex> lock(messages_mutex_);
+            messages_.clear();
+            for (const auto& m : j["messages"]) {
+                ChatMessage msg;
+                msg.username = m.value("username", "unknown");
+                msg.content = m.value("content", "");
+                msg.timestamp = m.value("timestamp", "");
+                messages_.push_back(msg);
+            }
+            LOG_INFO("已加载 {} 条历史消息", messages_.size());
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("加载消息历史失败: {}", e.what());
+    }
+}
+
+void ChatRoomServer::saveMessages() {
+    std::string file_path = ServerConfig::instance().history_file_path;
+    
+    // Ensure directory exists
+    std::filesystem::path p(file_path);
+    if (p.has_parent_path()) {
+        std::filesystem::create_directories(p.parent_path());
+    }
+
+    try {
+        json j;
+        {
+            std::lock_guard<std::mutex> lock(messages_mutex_);
+            j["base_index"] = base_message_index_;
+            j["messages"] = json::array();
+            for (const auto& msg : messages_) {
+                json m;
+                m["username"] = msg.username;
+                m["content"] = msg.content;
+                m["timestamp"] = msg.timestamp;
+                j["messages"].push_back(m);
+            }
+        }
+        
+        std::ofstream f(file_path);
+        f << j.dump(4);
+        LOG_INFO("已保存消息历史至 {}", file_path);
+    } catch (const std::exception& e) {
+        LOG_ERROR("保存消息历史失败: {}", e.what());
     }
 }
