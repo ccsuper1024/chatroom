@@ -22,6 +22,7 @@ target_link_libraries(chatroom_server
 # Test executable
 add_executable(chatroom_test
     tests/chatroom_test.cpp
+    tests/protocol_test.cpp
 )
 target_link_libraries(chatroom_test
     PRIVATE chatroom_server_lib
