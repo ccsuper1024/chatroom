@@ -274,9 +274,9 @@ ctest --output-on-failure
   - **状态**: 已实现
   - **现状**:
     - `tests/unit/server_test.cpp` 覆盖了输入校验、限流等核心逻辑。
-    - `tests/integration/integration_test.cpp` 覆盖了基本聊天流程和消息持久化。
+    - `tests/integration/integration_test.cpp` 覆盖了基本聊天流程、消息持久化和**并发压力测试**。
   - **计划**:
-    - 增加更多并发场景测试。
+    - 增加更多异常场景测试。
 - 结构抽象
   - **状态**: 部分实现
   - **实现细节**:
@@ -326,3 +326,4 @@ ctest --output-on-failure
 - **协议健壮性**：客户端 `sendHttpRequest` 现在完整解析 `Content-Length` 并循环读取响应，解决了大包截断问题；增加了 5 秒接收超时设置。
 - **客户端交互**：新增 `/users`、`/stats`、`/help` 命令，支持 SIGINT 优雅退出。
 - **配置与运维**：完成配置集中化 (ServerConfig) 和日志可配置化。
+- **测试增强**：新增 `IntegrationTest.PersistenceTest` (持久化验证) 和 `IntegrationTest.ConcurrencyTest` (并发压力验证)。

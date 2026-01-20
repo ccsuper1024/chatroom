@@ -6,6 +6,7 @@
 #include <chrono>
 #include <vector>
 #include <filesystem>
+#include <atomic>
 
 // 集成测试：测试完整的聊天流程
 TEST(IntegrationTest, ChatFlow) {
@@ -139,4 +140,78 @@ TEST(IntegrationTest, PersistenceTest) {
     if (std::filesystem::exists(test_history_file)) {
         std::filesystem::remove(test_history_file);
     }
+}
+
+// 并发测试：多用户同时登录发送消息
+TEST(IntegrationTest, ConcurrencyTest) {
+    const int TEST_PORT = 18083;
+    
+    // Temporarily increase rate limit for test
+    auto& config = ServerConfig::instance();
+    auto original_limit = config.rate_limit.max_requests;
+    config.rate_limit.max_requests = 2000;
+
+    ChatRoomServer server(TEST_PORT);
+    std::thread server_thread([&server]() { server.start(); });
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    const int CLIENT_COUNT = 20;
+    const int MSGS_PER_CLIENT = 5;
+    std::atomic<int> success_count{0};
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < CLIENT_COUNT; ++i) {
+        threads.emplace_back([i, TEST_PORT, &success_count]() {
+            try {
+                std::string username = "User" + std::to_string(i);
+                ChatRoomClient client("127.0.0.1", TEST_PORT);
+                // Retry login if failed due to contention/limit (though limit is raised)
+                bool logged_in = false;
+                for(int r=0; r<3; ++r) {
+                    if(client.login(username)) {
+                        logged_in = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                if (!logged_in) return;
+
+                for (int j = 0; j < MSGS_PER_CLIENT; ++j) {
+                    if (!client.sendMessage("Msg " + std::to_string(j))) return;
+                    // Small delay to allow some interleaving
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                success_count++;
+            } catch (...) {
+                // Ignore errors in threads, success_count will tell
+            }
+        });
+    }
+
+    for (auto& t : threads) {
+        if (t.joinable()) t.join();
+    }
+
+    EXPECT_EQ(success_count, CLIENT_COUNT) << "Not all clients completed successfully";
+
+    // Verify server is still responsive
+    try {
+        ChatRoomClient admin("127.0.0.1", TEST_PORT);
+        if (admin.login("Admin")) {
+            auto stats_str = admin.getStats();
+            EXPECT_FALSE(stats_str.empty());
+        } else {
+            ADD_FAILURE() << "Admin login failed";
+        }
+    } catch (...) {
+        ADD_FAILURE() << "Server failed to respond after concurrency test";
+    }
+
+    server.stop();
+    if (server_thread.joinable()) {
+        server_thread.join();
+    }
+    
+    // Restore config
+    config.rate_limit.max_requests = original_limit;
 }
