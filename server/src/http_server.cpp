@@ -3,6 +3,7 @@
 #include "thread_pool.h"
 #include "http_codec.h"
 #include "tcp_connection.h"
+#include "server_config.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -16,87 +17,9 @@
 #include <algorithm>
 #include <cctype>
 
-static std::string trim(const std::string& s) {
-    auto begin = s.begin();
-    while (begin != s.end() && std::isspace(static_cast<unsigned char>(*begin))) {
-        ++begin;
-    }
-    auto end = s.end();
-    if (begin == end) {
-        return std::string();
-    }
-    do {
-        --end;
-    } while (end != begin && std::isspace(static_cast<unsigned char>(*end)));
-    return std::string(begin, end + 1);
-}
-
-static ConnectionCheckConfig loadConnectionCheckConfig() {
-    ConnectionCheckConfig cfg{};
-    cfg.check_interval_seconds = 30;
-    cfg.max_failures = 3;
-    cfg.thread_pool_core = 0;
-    cfg.thread_pool_max = 0;
-    cfg.thread_queue_capacity = 0;
-    std::ifstream in("conf/server.yaml");
-    if (!in.is_open()) {
-        return cfg;
-    }
-    std::string line;
-    while (std::getline(in, line)) {
-        std::string t = trim(line);
-        if (t.empty() || t[0] == '#') {
-            continue;
-        }
-        auto pos = t.find(':');
-        if (pos == std::string::npos) {
-            continue;
-        }
-        std::string key = trim(t.substr(0, pos));
-        std::string value = trim(t.substr(pos + 1));
-        try {
-            if (key == "check_interval_seconds") {
-                cfg.check_interval_seconds = std::stoi(value);
-            } else if (key == "max_failures") {
-                cfg.max_failures = std::stoi(value);
-            } else if (key == "thread_pool_core") {
-                cfg.thread_pool_core = static_cast<std::size_t>(std::stoul(value));
-            } else if (key == "thread_pool_max") {
-                cfg.thread_pool_max = static_cast<std::size_t>(std::stoul(value));
-            } else if (key == "thread_queue_capacity") {
-                cfg.thread_queue_capacity = static_cast<std::size_t>(std::stoul(value));
-            }
-        } catch (...) {
-        }
-    }
-    if (cfg.check_interval_seconds <= 0) {
-        cfg.check_interval_seconds = 30;
-    }
-    if (cfg.max_failures <= 0) {
-        cfg.max_failures = 3;
-    }
-    
-    std::size_t hw = std::thread::hardware_concurrency();
-    if (hw == 0) {
-        hw = 4;
-    }
-    if (cfg.thread_pool_core == 0) {
-        cfg.thread_pool_core = std::max<std::size_t>(1, hw / 2);
-    }
-    if (cfg.thread_pool_max == 0) {
-        cfg.thread_pool_max = std::max<std::size_t>(cfg.thread_pool_core, hw * 2);
-    }
-    if (cfg.thread_queue_capacity == 0) {
-        cfg.thread_queue_capacity = 1024;
-    }
-    
-    return cfg;
-}
-
 HttpServer::HttpServer(int port) 
     : port_(port),
-      running_(false),
-      conn_cfg_(loadConnectionCheckConfig()) {
+      running_(false) {
 }
 
 HttpServer::~HttpServer() {
@@ -109,10 +32,11 @@ void HttpServer::registerHandler(const std::string& path, HttpHandler handler) {
 }
 
 void HttpServer::start() {
+    const auto& poolCfg = ServerConfig::instance().thread_pool;
     thread_pool_ = std::make_unique<ThreadPool>(
-        conn_cfg_.thread_pool_core,
-        conn_cfg_.thread_pool_max,
-        conn_cfg_.thread_queue_capacity);
+        poolCfg.core_threads,
+        poolCfg.max_threads,
+        poolCfg.queue_capacity);
     
     acceptor_ = std::make_unique<Acceptor>(&loop_, port_);
     if (!acceptor_->isValid()) {
@@ -146,149 +70,101 @@ void HttpServer::stop() {
     LOG_INFO("HTTP服务器已停止");
 }
 
-std::size_t HttpServer::getThreadPoolQueueSize() const {
-    return thread_pool_->queueSize();
-}
-
-std::size_t HttpServer::getThreadPoolRejectedCount() const {
-    return thread_pool_->rejectedCount();
-}
-
-std::size_t HttpServer::getThreadPoolThreadCount() const {
-    if (thread_pool_) {
-        return thread_pool_->currentThreadCount();
-    }
-    return 0;
-}
-
-std::size_t HttpServer::getThreadPoolActiveThreadCount() const {
-    if (thread_pool_) {
-        return thread_pool_->activeThreadCount();
-    }
-    return 0;
-}
-
-void HttpServer::handleHttpRequest(int fd, const HttpRequest& request) {
-    int request_fd = fd;
-    HttpRequest request_copy = request;
+void HttpServer::newConnection(int client_fd, const std::string& ip) {
+    auto conn = std::make_unique<TcpConnection>(this, &loop_, client_fd, ip);
     
-    bool posted = thread_pool_->tryPost([this, request_fd, request_copy]() {
-        HttpResponse response;
-        
-        std::string path = request_copy.path;
-        size_t q_pos = path.find('?');
-        if (q_pos != std::string::npos) {
-            path = path.substr(0, q_pos);
-        }
-
-        auto it_handler = handlers_.find(path);
-        if (it_handler != handlers_.end()) {
-            response = it_handler->second(request_copy);
-        } else {
-            response.status_code = 404;
-            response.status_text = "Not Found";
-            response.body = R"({"error": "路径未找到"})";
-        }
-        std::string response_str = buildResponse(response);
-        PendingResponse pr;
-        pr.fd = request_fd;
-        pr.data = std::move(response_str);
-        std::lock_guard<std::mutex> lock(pending_mutex_);
-        pending_responses_.push_back(std::move(pr));
-    });
-
-    if (!posted) {
-        // 线程池已满，直接在当前线程返回 503
-        HttpResponse response;
-        response.status_code = 503;
-        response.status_text = "Service Unavailable";
-        response.body = R"({"error": "服务器繁忙，请稍后重试"})";
-        std::string response_str = buildResponse(response);
-        
-        PendingResponse pr;
-        pr.fd = request_fd;
-        pr.data = std::move(response_str);
-        {
-            std::lock_guard<std::mutex> lock(pending_mutex_);
-            pending_responses_.push_back(std::move(pr));
-        }
-    }
-}
-
-void HttpServer::newConnection(int fd, const std::string& ip) {
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0) {
-        close(fd);
-        return;
-    }
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-        close(fd);
-        return;
-    }
-
-    int opt = 1;
-    setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &opt, sizeof(opt));
-
-#ifdef TCP_KEEPIDLE
-    int idle = conn_cfg_.check_interval_seconds;
-    if (idle <= 0) {
-        idle = 30;
-    }
-    setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
-#endif
-
-#ifdef TCP_KEEPINTVL
-    int intvl = conn_cfg_.check_interval_seconds;
-    if (intvl <= 0) {
-        intvl = 30;
-    }
-    setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
-#endif
-
-#ifdef TCP_KEEPCNT
-    int cnt = conn_cfg_.max_failures;
-    if (cnt <= 0) {
-        cnt = 3;
-    }
-    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
-#endif
-
-    auto conn = std::make_unique<TcpConnection>(this, &loop_, fd, ip);
-    connections_[fd] = std::move(conn);
-    LOG_INFO("新连接建立, fd={}, ip={}", fd, ip);
+    // TcpConnection manages its own callbacks and parsing
+    
+    connections_[client_fd] = std::move(conn);
 }
 
 void HttpServer::closeConnection(int fd) {
     auto it = connections_.find(fd);
-    if (it == connections_.end()) {
-        return;
+    if (it != connections_.end()) {
+        connections_.erase(it);
     }
-    auto& conn = it->second;
-    if (conn && !conn->closed()) {
-        conn->shutdown();
-        LOG_INFO("连接关闭, fd={}", fd);
+}
+
+void HttpServer::handleHttpRequest(int fd, const HttpRequest& request) {
+    auto task = [this, fd, request]() {
+        HttpResponse response;
+        
+        std::string path = request.path;
+        auto q_pos = path.find('?');
+        if (q_pos != std::string::npos) {
+            path = path.substr(0, q_pos);
+        }
+        
+        auto it = handlers_.find(path);
+        if (it != handlers_.end()) {
+            response = it->second(request);
+        } else {
+            response.status_code = 404;
+            response.status_text = "Not Found";
+            response.body = "{\"error\":\"Not Found\"}";
+        }
+        
+        std::string resp_str = "HTTP/1.1 " + std::to_string(response.status_code) + " " + response.status_text + "\r\n";
+        resp_str += "Content-Type: application/json\r\n";
+        resp_str += "Content-Length: " + std::to_string(response.body.size()) + "\r\n";
+        resp_str += "Connection: keep-alive\r\n";
+        resp_str += "Access-Control-Allow-Origin: *\r\n"; // CORS for web clients if any
+        resp_str += "\r\n";
+        resp_str += response.body;
+        
+        std::lock_guard<std::mutex> lock(pending_mutex_);
+        pending_responses_.push_back({fd, resp_str});
+        loop_.wakeup();
+    };
+
+    if (thread_pool_) {
+        bool posted = thread_pool_->tryPost(task);
+        if (!posted) {
+            LOG_WARN("线程池满，丢弃请求");
+            // Send 503 Service Unavailable directly? 
+            // Better to queue a 503 response if possible, but we are in IO thread here (if called from TcpConnection)
+            // or we are in... wait. handleHttpRequest is called from TcpConnection::handleRead -> EventLoop thread.
+            // So we can safely push to pending_responses_ directly or just send?
+            // But we want to be consistent.
+            
+            std::string resp = "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n";
+            std::lock_guard<std::mutex> lock(pending_mutex_);
+            pending_responses_.push_back({fd, resp});
+            loop_.wakeup();
+        }
+    } else {
+        // Fallback to sync execution if no thread pool
+        task();
     }
-    connections_.erase(it);
 }
 
 void HttpServer::processPendingResponses() {
-    std::vector<PendingResponse> pending;
+    std::vector<PendingResponse> responses;
     {
         std::lock_guard<std::mutex> lock(pending_mutex_);
-        if (pending_responses_.empty()) {
-            return;
-        }
-        pending.swap(pending_responses_);
+        responses.swap(pending_responses_);
     }
-    for (auto& pr : pending) {
-        auto it = connections_.find(pr.fd);
-        if (it == connections_.end()) {
-            continue;
+    
+    for (const auto& resp : responses) {
+        auto it = connections_.find(resp.fd);
+        if (it != connections_.end()) {
+            it->second->appendResponse(resp.data);
         }
-        auto& conn = it->second;
-        if (!conn || conn->closed()) {
-            continue;
-        }
-        conn->appendResponse(pr.data);
     }
+}
+
+std::size_t HttpServer::getThreadPoolQueueSize() const {
+    return thread_pool_ ? thread_pool_->queueSize() : 0;
+}
+
+std::size_t HttpServer::getThreadPoolRejectedCount() const {
+    return thread_pool_ ? thread_pool_->rejectedCount() : 0;
+}
+
+std::size_t HttpServer::getThreadPoolThreadCount() const {
+    return thread_pool_ ? thread_pool_->currentThreadCount() : 0;
+}
+
+std::size_t HttpServer::getThreadPoolActiveThreadCount() const {
+    return thread_pool_ ? thread_pool_->activeThreadCount() : 0;
 }

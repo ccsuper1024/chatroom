@@ -39,6 +39,7 @@ public:
 
     void setLevel(spdlog::level::level_enum level);
     void setPattern(const std::string& pattern);
+    void configure(bool console, const std::string& file_path, const std::string& level);
 
 private:
     Logger();

@@ -31,6 +31,20 @@ void Channel::setCloseCallback(Callback cb) {
     closeCallback_ = std::move(cb);
 }
 
+void Channel::enableReading() {
+    events_ |= EPOLLIN;
+    loop_->updateChannel(this);
+}
+
+void Channel::disableAll() {
+    events_ = 0;
+    loop_->updateChannel(this);
+}
+
+void Channel::remove() {
+    loop_->removeChannel(this);
+}
+
 void Channel::handleEvent(uint32_t revents) {
     if (revents & (EPOLLHUP | EPOLLERR)) {
         if (closeCallback_) {

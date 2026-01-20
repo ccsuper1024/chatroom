@@ -92,11 +92,56 @@ make -j$(nproc)
 - `dist/chatroom-client-1.0.0.tar.gz`
 - `dist/chatroom-server-1.0.0.tar.gz`
 
-## 性能调优
+## ⚙️ 配置与调优
 
-### 线程池配置
+服务器配置文件位于 `conf/server.yaml` (如果不存在将使用默认值)。
 
-服务器使用线程池处理请求。默认配置根据 CPU 核心数自动调整，但在高并发场景下，建议根据实际负载进行手动配置。
+### 1. 推荐配置详解
+
+```yaml
+# 基础设置
+port: 8080
+
+# 日志设置
+log_level: info           # 生产环境建议 info/warn，调试用 debug/trace
+log_file: logs/chatroom.log
+log_console: true         # 生产环境后台运行时可关闭
+log_max_size: 5242880     # 单个日志文件 5MB
+log_max_files: 3          # 保留最近 3 个文件
+
+# 线程池设置 (0 表示自动检测)
+thread_pool_core: 0       # 建议设置为 CPU 核心数
+thread_pool_max: 0        # 建议设置为 CPU 核心数 * 2 (IO密集型)
+thread_queue_capacity: 1024 # 等待队列长度
+
+# 连接保活与清理
+check_interval_seconds: 30       # 空闲连接检查周期
+heartbeat_timeout_seconds: 60    # 心跳超时判定时间
+session_cleanup_interval_seconds: 30 # 会话清理周期
+
+# 业务限制
+max_message_history: 1000 # 内存中保留的历史消息数
+max_message_length: 1024  # 单条消息最大长度
+rate_limit_enabled: true  # 开启限流
+rate_limit_window: 60     # 限流窗口(秒)
+rate_limit_max_requests: 60 # 窗口内最大请求数 (1 QPS)
+```
+
+### 2. 调优指南
+
+#### 并发性能调优
+- **线程池**: 
+  - 对于高并发场景，适当增加 `thread_pool_max` 和 `thread_queue_capacity`。
+  - 如果发现响应延迟高，检查 `/metrics` 中的线程池任务积压情况。
+  - 推荐: `core_threads` = CPU核数, `max_threads` = CPU核数 * 4 (如果大量IO阻塞)。
+
+#### 内存控制
+- **消息历史**: `max_message_history` 直接影响内存占用。每条消息约 1KB，1000条约占用 1MB。根据服务器内存调整。
+- **日志**: 限制 `log_max_size` 和 `log_max_files` 防止磁盘写满。
+
+#### 安全防护
+- **限流**: 开启 `rate_limit_enabled` 防止恶意刷屏或 DoS 攻击。默认 60秒/60次 可根据业务需求调整（例如 10/s）。
+- **心跳超时**: 缩短 `heartbeat_timeout_seconds` 可以更快释放断开连接的资源，但需配合客户端心跳频率。
 
 配置项位于 `conf/server.yaml`（如果不存在则创建）：
 

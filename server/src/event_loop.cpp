@@ -2,16 +2,45 @@
 #include "channel.h"
 
 #include <unistd.h>
+#include <sys/eventfd.h>
+#include <iostream>
 
 EventLoop::EventLoop()
     : epoll_fd_(::epoll_create1(0)),
+      wakeup_fd_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)),
       running_(false),
       events_(64) {
+    if (wakeup_fd_ < 0) {
+        std::cerr << "Failed to create eventfd" << std::endl;
+        abort();
+    }
+    wakeup_channel_ = std::make_unique<Channel>(this, wakeup_fd_);
+    wakeup_channel_->setReadCallback([this]() { handleWakeup(); });
+    wakeup_channel_->enableReading();
 }
 
 EventLoop::~EventLoop() {
+    wakeup_channel_->disableAll();
+    wakeup_channel_->remove();
+    ::close(wakeup_fd_);
     if (epoll_fd_ >= 0) {
         ::close(epoll_fd_);
+    }
+}
+
+void EventLoop::wakeup() {
+    uint64_t one = 1;
+    ssize_t n = ::write(wakeup_fd_, &one, sizeof(one));
+    if (n != sizeof(one)) {
+        std::cerr << "EventLoop::wakeup() writes " << n << " bytes instead of 8" << std::endl;
+    }
+}
+
+void EventLoop::handleWakeup() {
+    uint64_t one = 1;
+    ssize_t n = ::read(wakeup_fd_, &one, sizeof(one));
+    if (n != sizeof(one)) {
+        std::cerr << "EventLoop::handleWakeup() reads " << n << " bytes instead of 8" << std::endl;
     }
 }
 

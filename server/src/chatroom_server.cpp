@@ -1,6 +1,7 @@
 #include "chatroom_server.h"
 #include "json_utils.h"
 #include "logger.h"
+#include "server_config.h"
 #include <chrono>
 #include <iomanip>
 #include <sstream>
@@ -10,11 +11,12 @@
 
 static std::atomic<unsigned long long> g_connection_counter{0};
 
-static constexpr int HEARTBEAT_TIMEOUT_SECONDS = 60;
-static constexpr int SESSION_CLEANUP_INTERVAL_SECONDS = 30;
-static constexpr std::size_t MAX_MESSAGE_HISTORY = 1000;
-
 bool ChatRoomServer::checkRateLimit(const std::string& ip) {
+    const auto& config = ServerConfig::instance().rate_limit;
+    if (!config.enabled) {
+        return true;
+    }
+    
     if (ip.empty()) {
         LOG_WARN("Rate limit check skipped for empty IP");
         return true; 
@@ -25,12 +27,12 @@ bool ChatRoomServer::checkRateLimit(const std::string& ip) {
     
     if (entry.reset_time < now) {
         entry.count = 0;
-        entry.reset_time = now + std::chrono::minutes(1);
+        entry.reset_time = now + std::chrono::seconds(config.window_seconds);
     }
     
     // LOG_INFO("Rate limit check: IP={}, count={}", ip, entry.count);
 
-    if (entry.count >= 60) {
+    if (entry.count >= config.max_requests) {
         LOG_WARN("IP {} rate limited", ip);
         return false;
     }
@@ -40,7 +42,7 @@ bool ChatRoomServer::checkRateLimit(const std::string& ip) {
 }
 
 bool ChatRoomServer::validateUsername(const std::string& username) {
-    if (username.empty() || username.length() > 32) return false;
+    if (username.empty() || username.length() > ServerConfig::instance().max_username_length) return false;
     for (char c : username) {
         if (!isalnum(c) && c != '_') return false;
     }
@@ -48,7 +50,7 @@ bool ChatRoomServer::validateUsername(const std::string& username) {
 }
 
 bool ChatRoomServer::validateMessage(const std::string& content) {
-    if (content.empty() || content.length() > 1024) return false;
+    if (content.empty() || content.length() > ServerConfig::instance().max_message_length) return false;
     for (char c : content) {
         if (iscntrl(c) && c != '\n' && c != '\t') return false;
     }
@@ -153,10 +155,11 @@ HttpResponse ChatRoomServer::handleMetrics(const HttpRequest& request) {
             auto now = system_clock::now();
             std::size_t active = 0;
             std::map<std::string, std::size_t> version_counts;
+            int timeout = ServerConfig::instance().heartbeat_timeout_seconds;
             for (const auto& kv : sessions_) {
                 const auto& s = kv.second;
                 auto diff = duration_cast<seconds>(now - s.last_heartbeat).count();
-                bool is_active = diff <= HEARTBEAT_TIMEOUT_SECONDS;
+                bool is_active = diff <= timeout;
                 if (is_active) {
                     ++active;
                 }
@@ -209,43 +212,28 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
     try {
         auto req_json = json::parse(request.body);
         std::string username = req_json.value("username", "");
+        
         if (!validateUsername(username)) {
             return CreateErrorResponse(ErrorCode::INVALID_USERNAME);
         }
-        std::string connection_id = generateConnectionId();
+        
+        std::string conn_id = generateConnectionId();
+        
         {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
-            std::string final_username = username;
-            bool exists = true;
-            std::size_t suffix = 1;
-            while (exists) {
-                exists = false;
-                for (const auto& kv : sessions_) {
-                    if (kv.second.username == final_username) {
-                        exists = true;
-                        break;
-                    }
-                }
-                if (!exists) {
-                    break;
-                }
-                ++suffix;
-                final_username = username + "#" + std::to_string(suffix);
-            }
             UserSession session;
-            session.username = final_username;
-            session.connection_id = connection_id;
-            session.client_version.clear();
+            session.connection_id = conn_id;
+            session.username = username;
             session.last_heartbeat = std::chrono::system_clock::now();
-            sessions_[connection_id] = std::move(session);
-            username = final_username;
+            sessions_[conn_id] = session;
         }
-        LOG_INFO("用户登录: {}, connection_id={}", username, connection_id);
+        
+        LOG_INFO("用户登录: {} ({})", username, conn_id);
+        
         json resp_json;
         resp_json["success"] = true;
-        resp_json["message"] = "登录成功";
-        resp_json["username"] = username;
-        resp_json["connection_id"] = connection_id;
+        resp_json["connection_id"] = conn_id;
+        resp_json["message"] = "Login successful";
         
         HttpResponse response;
         response.body = resp_json.dump();
@@ -291,7 +279,7 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
             messages_.push_back(msg);
             metrics_collector_->updateMessageCount(messages_.size());
             LOG_INFO("Message stored. Total messages: {}, base_index: {}", messages_.size(), base_message_index_);
-            if (messages_.size() > MAX_MESSAGE_HISTORY) {
+            if (messages_.size() > ServerConfig::instance().max_message_history) {
                 messages_.pop_front();
                 ++base_message_index_;
             }
@@ -349,8 +337,8 @@ HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
                 msg_json["timestamp"] = messages_[i].timestamp;
                 resp_json["messages"].push_back(msg_json);
             }
-            // 返回当前的总消息数，以便客户端下次可以正确请求增量
-            resp_json["total_count"] = base_message_index_ + messages_.size();
+            // 返回下次请求应该使用的 since (当前最大 index + 1)
+            resp_json["next_since"] = base_message_index_ + messages_.size();
         }
         
         HttpResponse response;
@@ -369,10 +357,9 @@ HttpResponse ChatRoomServer::handleGetUsers(const HttpRequest& request) {
     if (!checkRateLimit(request.remote_ip)) {
         return CreateErrorResponse(ErrorCode::RATE_LIMITED);
     }
-    
+
     try {
         json resp_json;
-        (void)request;
         resp_json["success"] = true;
         resp_json["users"] = json::array();
         
@@ -380,18 +367,16 @@ HttpResponse ChatRoomServer::handleGetUsers(const HttpRequest& request) {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
             using namespace std::chrono;
             auto now = system_clock::now();
+            int timeout = ServerConfig::instance().heartbeat_timeout_seconds;
             for (const auto& kv : sessions_) {
-                const UserSession& s = kv.second;
-                json u;
-                u["username"] = s.username;
-                u["connection_id"] = s.connection_id;
-                u["client_version"] = s.client_version;
-                auto diff = duration_cast<seconds>(now - s.last_heartbeat).count();
-                bool is_active = diff <= HEARTBEAT_TIMEOUT_SECONDS;
-                u["online"] = is_active;
-                u["idle_seconds"] = diff;
-                u["last_heartbeat"] = formatTimestamp(s.last_heartbeat);
-                resp_json["users"].push_back(u);
+                auto diff = duration_cast<seconds>(now - kv.second.last_heartbeat).count();
+                if (diff <= timeout) {
+                    json user;
+                    user["username"] = kv.second.username;
+                    user["client_version"] = kv.second.client_version;
+                    user["idle_seconds"] = diff;
+                    resp_json["users"].push_back(user);
+                }
             }
         }
         
@@ -458,10 +443,13 @@ HttpResponse ChatRoomServer::handleHeartbeat(const HttpRequest& request) {
 
 void ChatRoomServer::cleanupInactiveSessions() {
     using namespace std::chrono;
+    int interval = ServerConfig::instance().session_cleanup_interval_seconds;
+    int timeout = ServerConfig::instance().heartbeat_timeout_seconds;
+    
     while (running_.load()) {
         {
             std::unique_lock<std::mutex> lock(cleanup_mutex_);
-            cleanup_cv_.wait_for(lock, std::chrono::seconds(SESSION_CLEANUP_INTERVAL_SECONDS), 
+            cleanup_cv_.wait_for(lock, std::chrono::seconds(interval), 
                 [this]{ return !running_.load(); });
         }
         if (!running_.load()) break;
@@ -470,7 +458,7 @@ void ChatRoomServer::cleanupInactiveSessions() {
         std::lock_guard<std::mutex> lock(sessions_mutex_);
         for (auto it = sessions_.begin(); it != sessions_.end();) {
             auto diff = duration_cast<seconds>(now - it->second.last_heartbeat).count();
-            if (diff > HEARTBEAT_TIMEOUT_SECONDS) {
+            if (diff > timeout) {
                 LOG_INFO("移除超时会话: {} {}", it->second.username, it->second.connection_id);
                 it = sessions_.erase(it);
             } else {

@@ -12,13 +12,6 @@
 #include "channel.h"
 #include "acceptor.h"
 
-struct ConnectionCheckConfig {
-    int check_interval_seconds;
-    int max_failures;
-    std::size_t thread_pool_core;
-    std::size_t thread_pool_max;
-    std::size_t thread_queue_capacity;
-};
 
 /**
  * HTTP请求处理器回调函数类型
@@ -53,7 +46,6 @@ private:
 
     int port_;
     bool running_;
-    ConnectionCheckConfig conn_cfg_;
     std::unique_ptr<ThreadPool> thread_pool_;
     
     std::map<int, std::unique_ptr<TcpConnection>> connections_;

@@ -19,6 +19,10 @@ public:
     void setWriteCallback(Callback cb);
     void setCloseCallback(Callback cb);
 
+    void enableReading();
+    void disableAll();
+    void remove();
+
     void handleEvent(uint32_t revents);
 
     EventLoop* ownerLoop() const;

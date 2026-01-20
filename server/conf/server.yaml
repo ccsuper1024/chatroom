@@ -1,3 +1,37 @@
+# Server Configuration
+
+# Basic Settings
+port: 8080
+
+# Logging Settings
+# Level: trace, debug, info, warn, error
+log_level: info
+log_file: logs/chatroom.log
+log_console: true
+# Max log file size in bytes (5MB)
+log_max_size: 5242880
+# Max number of log files to keep
+log_max_files: 3
+
+# Thread Pool Settings
+# core_threads: 0 means auto-detect (half of hardware threads)
+thread_pool_core: 0
+# max_threads: 0 means auto-detect (2x hardware threads)
+thread_pool_max: 0
+thread_queue_capacity: 1024
+
+# Connection & Heartbeat Settings
 check_interval_seconds: 30
 max_failures: 3
+heartbeat_timeout_seconds: 60
+session_cleanup_interval_seconds: 30
 
+# Business Logic Limits
+max_message_history: 1000
+max_message_length: 1024
+max_username_length: 32
+
+# Rate Limiting
+rate_limit_enabled: true
+rate_limit_window: 60
+rate_limit_max_requests: 60

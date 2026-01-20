@@ -1,6 +1,7 @@
 #include "chatroom_server.h"
 #include "logger.h"
 #include "stream_logger.h"
+#include "server_config.h"
 #include <csignal>
 #include <memory>
 
@@ -15,21 +16,29 @@ void signalHandler(int signum) {
 }
 
 int main(int argc, char* argv[]) {
-    initLoggerForStdStreams();
-    int port = 8080;
+    // Load configuration
+    ServerConfig::instance().load("conf/server.yaml");
+
+    // Allow port override from command line
     if (argc > 1) {
-        port = std::atoi(argv[1]);
+        ServerConfig::instance().port = std::atoi(argv[1]);
     }
     
+    // Configure logger based on config
+    const auto& logCfg = ServerConfig::instance().logging;
+    Logger::instance().configure(logCfg.console_output, logCfg.file_path, logCfg.level);
+
+    initLoggerForStdStreams();
+    
     LOG_INFO("===== 聊天室服务器 =====");
-    LOG_INFO("端口: {}", port);
+    LOG_INFO("端口: {}", ServerConfig::instance().port);
     
     // 注册信号处理器
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
     
     try {
-        ChatRoomServer server(port);
+        ChatRoomServer server(ServerConfig::instance().port);
         g_server = &server;
         server.start();
         g_server = nullptr;
