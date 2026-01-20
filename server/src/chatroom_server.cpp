@@ -128,23 +128,28 @@ void ChatRoomServer::start() {
     LOG_INFO("聊天室服务器启动");
     
     // Init Database
-    std::string db_path = ServerConfig::instance().history_file_path;
+    // Legacy logic for .json -> .db migration can be kept but we should look at config now.
+    // If config type is sqlite, we do the migration logic.
+    DatabaseConfig& db_config = ServerConfig::instance().db;
     
-    // If path ends with .json, change it to .db to avoid conflict with legacy file
-    if (db_path.size() > 5 && db_path.substr(db_path.size() - 5) == ".json") {
-        db_path = db_path.substr(0, db_path.size() - 5) + ".db";
-    }
-    if (db_path.empty()) db_path = "chatroom.db";
+    if (db_config.type == "sqlite") {
+        std::string db_path = db_config.path;
+        // If path ends with .json, change it to .db to avoid conflict with legacy file
+        if (db_path.size() > 5 && db_path.substr(db_path.size() - 5) == ".json") {
+            db_path = db_path.substr(0, db_path.size() - 5) + ".db";
+        }
+        if (db_path.empty()) db_path = "chatroom.db";
+        db_config.path = db_path; // update back
 
-    // Ensure directory exists
-    std::filesystem::path p(db_path);
-    if (p.has_parent_path()) {
-        std::filesystem::create_directories(p.parent_path());
+        // Ensure directory exists
+        std::filesystem::path p(db_path);
+        if (p.has_parent_path()) {
+            std::filesystem::create_directories(p.parent_path());
+        }
     }
     
-    if (!DatabaseManager::instance().init(db_path)) {
-        LOG_ERROR("Failed to initialize database at {}", db_path);
-        // Should we abort? Probably yes.
+    if (!DatabaseManager::instance().init(db_config)) {
+        LOG_ERROR("Failed to initialize database");
         return;
     }
 

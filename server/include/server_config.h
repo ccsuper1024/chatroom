@@ -4,6 +4,7 @@
 #include <mutex>
 #include <vector>
 #include <chrono>
+#include "database_config.h"
 
 struct LogConfig {
     std::string level = "info";
@@ -34,6 +35,9 @@ struct ServerConfig {
     
     // Thread Pool
     ThreadPoolConfig thread_pool;
+    
+    // Database
+    DatabaseConfig db;
     
     // Connection & Heartbeat
     int connection_check_interval_seconds = 30;
