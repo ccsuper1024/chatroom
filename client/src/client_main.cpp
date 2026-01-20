@@ -23,7 +23,9 @@ void receiveMessages(ChatRoomClient& client) {
         client.sendHeartbeat();
         auto messages = client.getMessages();
         for (const auto& msg : messages) {
-            std::cout << msg << std::endl;
+            std::cout << "[" << msg.timestamp << "] " 
+                      << msg.username << ": " 
+                      << msg.content << std::endl;
         }
         // 使用更短的sleep间隔以便更快响应退出信号
         for (int i = 0; i < cfg.interval_seconds * 10 && g_running; ++i) {

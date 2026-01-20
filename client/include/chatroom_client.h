@@ -9,6 +9,12 @@ struct User {
     long idle_seconds;
 };
 
+struct ClientMessage {
+    std::string username;
+    std::string content;
+    std::string timestamp;
+};
+
 /**
  * 聊天室客户端
  */
@@ -23,7 +29,7 @@ public:
     bool sendMessage(const std::string& content);
     
     // 获取新消息
-    std::vector<std::string> getMessages();
+    std::vector<ClientMessage> getMessages();
     
     // 获取在线用户列表
     std::vector<User> getUsers();

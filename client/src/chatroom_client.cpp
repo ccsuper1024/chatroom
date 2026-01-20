@@ -118,35 +118,25 @@ bool ChatRoomClient::sendMessage(const std::string& content) {
     }
 }
 
-std::vector<std::string> ChatRoomClient::getMessages() {
-    std::vector<std::string> new_messages;
+std::vector<ClientMessage> ChatRoomClient::getMessages() {
+    std::vector<ClientMessage> new_messages;
     
     try {
-        std::string response = sendHttpRequest("GET", "/messages?since=" + std::to_string(last_message_count_));
+        std::string path = "/messages?since=" + std::to_string(last_message_count_);
+        std::string response = sendHttpRequest("GET", path);
         
         auto resp_json = json::parse(response);
-        if (resp_json.contains("success") && resp_json["success"].is_boolean() && resp_json["success"].get<bool>()) {
+        if (resp_json["success"]) {
             if (resp_json.contains("messages") && resp_json["messages"].is_array()) {
-                auto messages = resp_json["messages"];
-                
-                // 服务端现在只返回新消息（或者我们需要的消息）
-                for (const auto& msg : messages) {
-                    std::ostringstream oss;
-                    oss << "[" << msg["timestamp"].get<std::string>() << "] "
-                        << msg["username"].get<std::string>() << ": "
-                        << msg["content"].get<std::string>();
-                    new_messages.push_back(oss.str());
-                }
-                
-                // 更新本地消息计数
-                if (resp_json.contains("next_since")) {
-                    last_message_count_ = resp_json["next_since"].get<size_t>();
-                } else if (resp_json.contains("total_count")) {
-                    last_message_count_ = resp_json["total_count"].get<size_t>();
-                } else {
-                    // 兼容旧服务端（如果有的话，但我们已经改了服务端）
-                    // 如果没有 next_since/total_count，可能是全量返回，我们需要一种保守策略
-                    // 但这里我们假设是配套升级的。
+                auto& messages = resp_json["messages"];
+                if (!messages.empty()) {
+                    for (const auto& msg : messages) {
+                        ClientMessage cm;
+                        cm.username = msg.value("username", "unknown");
+                        cm.content = msg.value("content", "");
+                        cm.timestamp = msg.value("timestamp", "");
+                        new_messages.push_back(cm);
+                    }
                     last_message_count_ += messages.size();
                 }
             }
