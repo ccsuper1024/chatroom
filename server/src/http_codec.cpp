@@ -73,6 +73,7 @@ std::string buildResponse(const HttpResponse& response) {
     oss << "HTTP/1.1 " << response.status_code << " " << response.status_text << "\r\n";
     oss << "Content-Type: " << response.content_type << "\r\n";
     oss << "Content-Length: " << response.body.size() << "\r\n";
+    oss << "Connection: keep-alive\r\n";
     oss << "Access-Control-Allow-Origin: *\r\n";
     oss << "\r\n";
     oss << response.body;

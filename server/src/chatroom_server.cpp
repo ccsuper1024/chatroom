@@ -2,6 +2,7 @@
 #include "json_utils.h"
 #include "logger.h"
 #include "server_config.h"
+#include "database_manager.h"
 #include <chrono>
 #include <iomanip>
 #include <sstream>
@@ -101,7 +102,6 @@ static std::string generateConnectionId() {
 
 ChatRoomServer::ChatRoomServer(int port)
     : metrics_collector_(std::make_shared<MetricsCollector>()),
-      base_message_index_(0),
       running_(false) {
     http_server_ = std::make_unique<HttpServer>(port);
     
@@ -126,7 +126,28 @@ ChatRoomServer::ChatRoomServer(int port)
 
 void ChatRoomServer::start() {
     LOG_INFO("聊天室服务器启动");
-    loadMessages();
+    
+    // Init Database
+    std::string db_path = ServerConfig::instance().history_file_path;
+    
+    // If path ends with .json, change it to .db to avoid conflict with legacy file
+    if (db_path.size() > 5 && db_path.substr(db_path.size() - 5) == ".json") {
+        db_path = db_path.substr(0, db_path.size() - 5) + ".db";
+    }
+    if (db_path.empty()) db_path = "chatroom.db";
+
+    // Ensure directory exists
+    std::filesystem::path p(db_path);
+    if (p.has_parent_path()) {
+        std::filesystem::create_directories(p.parent_path());
+    }
+    
+    if (!DatabaseManager::instance().init(db_path)) {
+        LOG_ERROR("Failed to initialize database at {}", db_path);
+        // Should we abort? Probably yes.
+        return;
+    }
+
     start_time_ = std::chrono::system_clock::now();
     running_.store(true);
     cleanup_thread_ = std::thread([this]() { cleanupInactiveSessions(); });
@@ -256,16 +277,15 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
         msg.username = username;
         msg.content = content;
         msg.timestamp = getCurrentTimestamp();
-        {
-            std::lock_guard<std::mutex> lock(messages_mutex_);
-            messages_.push_back(msg);
-            metrics_collector_->updateMessageCount(messages_.size());
-            LOG_INFO("Message stored. Total messages: {}, base_index: {}", messages_.size(), base_message_index_);
-            if (messages_.size() > ServerConfig::instance().max_message_history) {
-                messages_.pop_front();
-                ++base_message_index_;
-            }
+        
+        if (DatabaseManager::instance().addMessage(msg)) {
+             metrics_collector_->updateMessageCount(DatabaseManager::instance().getMessageCount());
+             LOG_INFO("Message stored. Total messages: {}", DatabaseManager::instance().getMessageCount());
+        } else {
+             LOG_ERROR("Failed to store message to database");
+             return CreateErrorResponse(ErrorCode::INTERNAL_ERROR);
         }
+
         LOG_INFO("收到消息 [{}]: {}", msg.username, msg.content);
         json resp_json;
         resp_json["success"] = true;
@@ -289,39 +309,26 @@ HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
     }
     
     try {
-        size_t since_idx = parseSinceParam(request.path);
+        size_t since_val = parseSinceParam(request.path);
+        long long last_id = static_cast<long long>(since_val);
         
         json resp_json;
         resp_json["success"] = true;
         resp_json["messages"] = json::array();
         
-        {
-            std::lock_guard<std::mutex> lock(messages_mutex_);
-            LOG_INFO("Handling GetMessages. since={}, base_index={}, total_msgs={}", since_idx, base_message_index_, messages_.size());
-            // 客户端请求 since_idx 之后的消息
-            // 我们当前的消息范围是 [base_message_index_, base_message_index_ + messages_.size())
-            
-            // 计算在 messages_ deque 中的起始下标
-            size_t start_in_deque = 0;
-            if (since_idx >= base_message_index_) {
-                start_in_deque = since_idx - base_message_index_;
-            } else {
-                // 如果请求的 since_idx 小于 base_message_index_，
-                // 说明客户端落后太多（消息已被淘汰），或者客户端是新来的（since=0）
-                // 我们从头开始返回
-                start_in_deque = 0;
-            }
-
-            for (size_t i = start_in_deque; i < messages_.size(); ++i) {
-                json msg_json;
-                msg_json["username"] = messages_[i].username;
-                msg_json["content"] = messages_[i].content;
-                msg_json["timestamp"] = messages_[i].timestamp;
-                resp_json["messages"].push_back(msg_json);
-            }
-            // 返回下次请求应该使用的 since (当前最大 index + 1)
-            resp_json["next_since"] = base_message_index_ + messages_.size();
+        auto history = DatabaseManager::instance().getMessagesAfter(last_id);
+        
+        long long max_id = last_id;
+        for (const auto& msg : history) {
+            json msg_json;
+            msg_json["username"] = msg.username;
+            msg_json["content"] = msg.content;
+            msg_json["timestamp"] = msg.timestamp;
+            resp_json["messages"].push_back(msg_json);
+            if (msg.id > max_id) max_id = msg.id;
         }
+        
+        resp_json["next_since"] = max_id;
         
         HttpResponse response;
         response.body = resp_json.dump();
@@ -417,51 +424,60 @@ HttpResponse ChatRoomServer::handleMetrics(const HttpRequest& request) {
     }
 
     try {
-        json body = metrics_collector_->getMetrics();
-        body["success"] = true;
+        // Collect latest stats before generating report
+        metrics_collector_->updateMessageCount(DatabaseManager::instance().getMessageCount());
 
-        {
-            std::lock_guard<std::mutex> lock(messages_mutex_);
-            body["message_count"] = messages_.size();
-        }
-
+        std::size_t active_count = 0;
+        std::map<std::string, std::size_t> version_counts;
         {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
-            body["session_count"] = sessions_.size();
             using namespace std::chrono;
             auto now = system_clock::now();
-            std::size_t active = 0;
-            std::map<std::string, std::size_t> version_counts;
             int timeout = ServerConfig::instance().heartbeat_timeout_seconds;
             for (const auto& kv : sessions_) {
                 const auto& s = kv.second;
                 auto diff = duration_cast<seconds>(now - s.last_heartbeat).count();
-                bool is_active = diff <= timeout;
-                if (is_active) {
-                    ++active;
+                if (diff <= timeout) {
+                    ++active_count;
                 }
                 if (!s.client_version.empty()) {
                     ++version_counts[s.client_version];
                 }
             }
-            body["active_session_count"] = active;
-            metrics_collector_->updateActiveSessions(active);
-            
-            json versions_json;
-            for (const auto& kv : version_counts) {
-                versions_json[kv.first] = kv.second;
-            }
-            body["client_versions"] = versions_json;
+            metrics_collector_->updateActiveSessions(active_count);
         }
 
-        // Thread pool metrics
-        body["thread_pool_queue_size"] = http_server_->getThreadPoolQueueSize();
-        body["thread_pool_rejected_count"] = http_server_->getThreadPoolRejectedCount();
-        body["thread_pool_thread_count"] = http_server_->getThreadPoolThreadCount();
-        body["thread_pool_active_thread_count"] = http_server_->getThreadPoolActiveThreadCount();
+        std::string prom_metrics = metrics_collector_->getPrometheusMetrics();
+        std::ostringstream ss;
+        ss << prom_metrics;
+
+        // Append thread pool metrics
+        ss << "# HELP chatroom_thread_pool_queue_size Current tasks in queue\n";
+        ss << "# TYPE chatroom_thread_pool_queue_size gauge\n";
+        ss << "chatroom_thread_pool_queue_size " << http_server_->getThreadPoolQueueSize() << "\n";
+
+        ss << "# HELP chatroom_thread_pool_rejected_total Total rejected tasks\n";
+        ss << "# TYPE chatroom_thread_pool_rejected_total counter\n";
+        ss << "chatroom_thread_pool_rejected_total " << http_server_->getThreadPoolRejectedCount() << "\n";
+
+        ss << "# HELP chatroom_thread_pool_threads Total threads\n";
+        ss << "# TYPE chatroom_thread_pool_threads gauge\n";
+        ss << "chatroom_thread_pool_threads " << http_server_->getThreadPoolThreadCount() << "\n";
+
+        ss << "# HELP chatroom_thread_pool_active_threads Active threads\n";
+        ss << "# TYPE chatroom_thread_pool_active_threads gauge\n";
+        ss << "chatroom_thread_pool_active_threads " << http_server_->getThreadPoolActiveThreadCount() << "\n";
+
+        // Client versions
+        ss << "# HELP chatroom_client_versions Active client versions\n";
+        ss << "# TYPE chatroom_client_versions gauge\n";
+        for (const auto& kv : version_counts) {
+             ss << "chatroom_client_versions{version=\"" << kv.first << "\"} " << kv.second << "\n";
+        }
 
         HttpResponse resp;
-        resp.body = body.dump();
+        resp.body = ss.str();
+        resp.content_type = "text/plain; version=0.0.4";
         return resp;
     } catch (const std::exception& e) {
         LOG_ERROR("处理 Metrics 请求失败: {}", e.what());
@@ -476,70 +492,5 @@ void ChatRoomServer::stop() {
     if (cleanup_thread_.joinable()) {
         cleanup_thread_.join();
     }
-    saveMessages();
     http_server_->stop();
-}
-
-void ChatRoomServer::loadMessages() {
-    std::string file_path = ServerConfig::instance().history_file_path;
-    if (!std::filesystem::exists(file_path)) {
-        LOG_INFO("消息历史文件不存在，跳过加载: {}", file_path);
-        return;
-    }
-
-    try {
-        std::ifstream f(file_path);
-        json j;
-        f >> j;
-
-        if (j.contains("base_index")) {
-            base_message_index_ = j["base_index"];
-        }
-        if (j.contains("messages") && j["messages"].is_array()) {
-            std::lock_guard<std::mutex> lock(messages_mutex_);
-            messages_.clear();
-            for (const auto& m : j["messages"]) {
-                ChatMessage msg;
-                msg.username = m.value("username", "unknown");
-                msg.content = m.value("content", "");
-                msg.timestamp = m.value("timestamp", "");
-                messages_.push_back(msg);
-            }
-            LOG_INFO("已加载 {} 条历史消息", messages_.size());
-        }
-    } catch (const std::exception& e) {
-        LOG_ERROR("加载消息历史失败: {}", e.what());
-    }
-}
-
-void ChatRoomServer::saveMessages() {
-    std::string file_path = ServerConfig::instance().history_file_path;
-    
-    // Ensure directory exists
-    std::filesystem::path p(file_path);
-    if (p.has_parent_path()) {
-        std::filesystem::create_directories(p.parent_path());
-    }
-
-    try {
-        json j;
-        {
-            std::lock_guard<std::mutex> lock(messages_mutex_);
-            j["base_index"] = base_message_index_;
-            j["messages"] = json::array();
-            for (const auto& msg : messages_) {
-                json m;
-                m["username"] = msg.username;
-                m["content"] = msg.content;
-                m["timestamp"] = msg.timestamp;
-                j["messages"].push_back(m);
-            }
-        }
-        
-        std::ofstream f(file_path);
-        f << j.dump(4);
-        LOG_INFO("已保存消息历史至 {}", file_path);
-    } catch (const std::exception& e) {
-        LOG_ERROR("保存消息历史失败: {}", e.what());
-    }
 }

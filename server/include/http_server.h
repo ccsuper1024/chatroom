@@ -21,6 +21,8 @@ using HttpHandler = std::function<HttpResponse(const HttpRequest&)>;
 class ThreadPool;
 class TcpConnection;
 
+class EventLoopThreadPool;
+
 class HttpServer {
 public:
     explicit HttpServer(int port);
@@ -47,20 +49,13 @@ private:
     int port_;
     bool running_;
     std::unique_ptr<ThreadPool> thread_pool_;
+    std::unique_ptr<EventLoopThreadPool> io_thread_pool_;
     
-    std::map<int, std::unique_ptr<TcpConnection>> connections_;
+    std::map<int, std::shared_ptr<TcpConnection>> connections_;
     
-    struct PendingResponse {
-        int fd;
-        std::string data;
-    };
-    std::mutex pending_mutex_;
-    std::vector<PendingResponse> pending_responses_;
-    
-    void handleHttpRequest(int fd, const HttpRequest& request);
+    void handleHttpRequest(std::shared_ptr<TcpConnection> conn, const HttpRequest& request);
     void newConnection(int fd, const std::string& ip);
     void closeConnection(int fd);
-    void processPendingResponses();
     
     // 路由表
     std::map<std::string, HttpHandler> handlers_;

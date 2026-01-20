@@ -19,6 +19,7 @@ public:
     void updateMessageCount(size_t count);
     
     json getMetrics() const;
+    std::string getPrometheusMetrics() const;
 
 private:
     mutable std::mutex mutex_;

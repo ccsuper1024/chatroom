@@ -29,8 +29,13 @@ TcpConnection::TcpConnection(HttpServer* server, EventLoop* loop, int fd, const 
     ch->setCloseCallback([this]() {
         handleClose();
     });
-    loop_->addChannel(ch.get());
     channel_ = std::move(ch);
+}
+
+void TcpConnection::connectEstablished() {
+    loop_->runInLoop([this]() {
+        loop_->addChannel(channel_.get());
+    });
 }
 
 TcpConnection::~TcpConnection() {
@@ -93,7 +98,17 @@ void TcpConnection::handleRead() {
         }
 
         req.remote_ip = ip_;
-        server_->handleHttpRequest(fd_, req);
+        server_->handleHttpRequest(shared_from_this(), req);
+    }
+}
+
+void TcpConnection::send(const std::string& data) {
+    if (loop_->isInLoopThread()) {
+        appendResponse(data);
+    } else {
+        loop_->runInLoop([self = shared_from_this(), data]() {
+            self->appendResponse(data);
+        });
     }
 }
 

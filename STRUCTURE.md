@@ -92,6 +92,24 @@ chatroom/
 - 引用server/include中的json_utils.h
 ```
 
+## 🏗️ 架构升级 (Architecture Upgrade)
+
+### Multi-Reactor 模型
+项目已从单线程 EventLoop 升级为 **Master-Slave Reactor** 多线程模型：
+- **Master Loop (Main Thread)**: 负责监听端口、接受新连接 (`Acceptor`)。
+- **Slave Loops (IO Threads)**: 负责已连接 socket 的读写事件 (`TcpConnection`)。
+- **ThreadPool**: 使用 `EventLoopThreadPool` 管理 IO 线程池，默认开启 4 个工作线程。
+
+### 存储层升级 (Storage Layer)
+消息存储后端已从文件系统 (JSON) 迁移至 **SQLite 数据库**：
+- **DatabaseManager**: 单例模式封装所有数据库操作。
+- **SQLite3**: 采用轻量级嵌入式关系型数据库，支持高并发读写。
+- **Schema**: 消息表包含自增 ID、用户名、内容、时间戳，支持高效的历史消息查询 (`since_id`)。
+- **Reliability**: 解决了服务器重启后消息索引丢失的问题，数据更安全。
+- **Worker Thread Pool**: 负责处理业务逻辑（如消息路由、数据库操作）。
+
+这种架构显著提升了高并发场景下的吞吐量和响应速度，避免了 IO 操作阻塞主线程。
+
 ## 🔧 开发指南
 
 ### 编译整个项目
@@ -325,5 +343,6 @@ ctest --output-on-failure
 - **协议健壮性**：客户端 `sendHttpRequest` 现在完整解析 `Content-Length` 并循环读取响应，解决了大包截断问题；增加了 5 秒接收超时设置。
 - **客户端交互**：新增 `/users`、`/stats`、`/help` 命令，支持 SIGINT 优雅退出。
 - **配置与运维**：完成配置集中化 (ServerConfig) 和日志可配置化。
-- **测试增强**：新增 `IntegrationTest.PersistenceTest` (持久化验证)、`IntegrationTest.ConcurrencyTest` (并发压力验证) 和 `IntegrationTest.SecurityTest` (异常安全验证)。
+  - **可观测性**：`/metrics` 接口已升级为 **Prometheus 格式**，支持直接对接 Grafana 监控大盘。
+  - **测试增强**：新增 `IntegrationTest.PersistenceTest` (持久化验证)、`IntegrationTest.ConcurrencyTest` (并发压力验证) 和 `IntegrationTest.SecurityTest` (异常安全验证)。
 - **错误处理统一**：底层协议错误（如包过大、格式错误）现在统一返回标准 JSON 错误格式，修复了直接断开连接导致客户端无法获取错误信息的问题。

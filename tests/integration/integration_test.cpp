@@ -298,3 +298,37 @@ TEST(IntegrationTest, SecurityTest) {
         server_thread.join();
     }
 }
+
+// 监控指标测试：Prometheus 格式验证
+TEST(IntegrationTest, PrometheusMetrics) {
+    const int TEST_PORT = 18086;
+    ChatRoomServer server(TEST_PORT);
+    std::thread server_thread([&server]() { server.start(); });
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    // Make some requests to generate metrics
+    {
+        ChatRoomClient client("127.0.0.1", TEST_PORT);
+        client.login("MetricsUser");
+        client.sendMessage("Testing Metrics");
+    }
+
+    // Request metrics
+    std::string req = "GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    std::string resp = SendRaw(TEST_PORT, req);
+
+    // Verify response headers
+    EXPECT_NE(resp.find("Content-Type: text/plain; version=0.0.4"), std::string::npos) 
+        << "Should return Prometheus content type";
+
+    // Verify Prometheus format
+    EXPECT_NE(resp.find("# HELP chatroom_uptime_seconds"), std::string::npos);
+    EXPECT_NE(resp.find("# TYPE chatroom_requests_total counter"), std::string::npos);
+    EXPECT_NE(resp.find("chatroom_requests_total{method=\"POST\",path=\"/login\"}"), std::string::npos);
+    EXPECT_NE(resp.find("chatroom_stored_messages"), std::string::npos);
+
+    server.stop();
+    if (server_thread.joinable()) {
+        server_thread.join();
+    }
+}

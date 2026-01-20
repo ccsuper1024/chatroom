@@ -37,3 +37,9 @@ dist/*
 
 # 第三方依赖库
 third_party/
+
+# 运行时数据
+*.db
+*.sqlite
+data/
+*.json

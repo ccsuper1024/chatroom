@@ -3,6 +3,7 @@
 #include "http_server.h"
 #include "metrics_collector.h"
 #include "server_error.h"
+#include "chat_message.h"
 #include <string>
 #include <vector>
 #include <deque>
@@ -14,15 +15,6 @@
 #include <thread>
 #include <atomic>
 #include <condition_variable>
-
-/**
- * 聊天消息结构
- */
-struct ChatMessage {
-    std::string username;
-    std::string content;
-    std::string timestamp;
-};
 
 /**
  * 聊天室服务器
@@ -41,9 +33,6 @@ public:
 private:
     std::unique_ptr<HttpServer> http_server_;
     std::shared_ptr<MetricsCollector> metrics_collector_;
-    std::deque<ChatMessage> messages_;  // 消息历史
-    std::size_t base_message_index_;    // 历史消息的起始索引
-    std::mutex messages_mutex_;          // 保护消息列表的互斥锁
     
     struct UserSession {
         std::string username;
@@ -91,8 +80,4 @@ private:
     bool checkRateLimit(const std::string& ip);
     bool validateUsername(const std::string& username);
     bool validateMessage(const std::string& content);
-
-    // Message Persistence
-    void loadMessages();
-    void saveMessages();
 };
