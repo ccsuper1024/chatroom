@@ -60,12 +60,11 @@ bool ChatRoomServer::validateMessage(const std::string& content) {
     return true;
 }
 
-static std::size_t parseSinceParam(const std::string& path) {
+static std::string getQueryParam(const std::string& path, const std::string& key) {
     auto pos = path.find('?');
     if (pos == std::string::npos) {
-        return 0;
+        return "";
     }
-    std::size_t result = 0;
     std::string query = path.substr(pos + 1);
     std::size_t start = 0;
     while (start < query.size()) {
@@ -73,14 +72,9 @@ static std::size_t parseSinceParam(const std::string& path) {
         std::string pair = query.substr(start, amp == std::string::npos ? std::string::npos : amp - start);
         auto eq = pair.find('=');
         if (eq != std::string::npos) {
-            std::string key = pair.substr(0, eq);
-            std::string value = pair.substr(eq + 1);
-            if (key == "since") {
-                try {
-                    result = static_cast<std::size_t>(std::stoull(value));
-                } catch (...) {
-                }
-                break;
+            std::string current_key = pair.substr(0, eq);
+            if (current_key == key) {
+                return pair.substr(eq + 1);
             }
         }
         if (amp == std::string::npos) {
@@ -88,7 +82,7 @@ static std::size_t parseSinceParam(const std::string& path) {
         }
         start = amp + 1;
     }
-    return result;
+    return "";
 }
 
 static std::string generateConnectionId() {
@@ -202,6 +196,7 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
         json resp_json;
         resp_json["success"] = true;
         resp_json["connection_id"] = connection_id;
+        resp_json["username"] = username;
         
         HttpResponse response;
         response.body = resp_json.dump();
@@ -265,6 +260,8 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
         std::string username = req_json.value("username", "");
         std::string content = req_json.value("content", "");
         std::string connection_id = req_json.value("connection_id", "");
+        std::string target_user = req_json.value("target_user", "");
+        std::string room_id = req_json.value("room_id", "");
         if (!connection_id.empty()) {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
             auto it = sessions_.find(connection_id);
@@ -282,6 +279,8 @@ HttpResponse ChatRoomServer::handleSendMessage(const HttpRequest& request) {
         msg.username = username;
         msg.content = content;
         msg.timestamp = getCurrentTimestamp();
+        msg.target_user = target_user;
+        msg.room_id = room_id;
         
         if (DatabaseManager::instance().addMessage(msg)) {
              metrics_collector_->updateMessageCount(DatabaseManager::instance().getMessageCount());
@@ -314,14 +313,21 @@ HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
     }
     
     try {
-        size_t since_val = parseSinceParam(request.path);
-        long long last_id = static_cast<long long>(since_val);
+        std::string since_val = getQueryParam(request.path, "since");
+        long long last_id = 0;
+        if (!since_val.empty()) {
+            try {
+                last_id = std::stoll(since_val);
+            } catch (...) {}
+        }
+
+        std::string username = getQueryParam(request.path, "username");
         
         json resp_json;
         resp_json["success"] = true;
         resp_json["messages"] = json::array();
         
-        auto history = DatabaseManager::instance().getMessagesAfter(last_id);
+        auto history = DatabaseManager::instance().getMessagesAfter(last_id, username);
         
         long long max_id = last_id;
         for (const auto& msg : history) {
@@ -329,6 +335,9 @@ HttpResponse ChatRoomServer::handleGetMessages(const HttpRequest& request) {
             msg_json["username"] = msg.username;
             msg_json["content"] = msg.content;
             msg_json["timestamp"] = msg.timestamp;
+            if (!msg.target_user.empty()) msg_json["target_user"] = msg.target_user;
+            if (!msg.room_id.empty()) msg_json["room_id"] = msg.room_id;
+            
             resp_json["messages"].push_back(msg_json);
             if (msg.id > max_id) max_id = msg.id;
         }

@@ -102,11 +102,17 @@ bool ChatRoomClient::login(const std::string& username) {
     }
 }
 
-bool ChatRoomClient::sendMessage(const std::string& content) {
+bool ChatRoomClient::sendMessage(const std::string& content, const std::string& target_user, const std::string& room_id) {
     try {
         json request;
         request["username"] = username_;
         request["content"] = content;
+        if (!target_user.empty()) {
+            request["target_user"] = target_user;
+        }
+        if (!room_id.empty()) {
+            request["room_id"] = room_id;
+        }
         
         std::string response = sendHttpRequest("POST", "/send", request.dump());
         
@@ -135,6 +141,8 @@ std::vector<ClientMessage> ChatRoomClient::getMessages() {
                         cm.username = msg.value("username", "unknown");
                         cm.content = msg.value("content", "");
                         cm.timestamp = msg.value("timestamp", "");
+                        cm.target_user = msg.value("target_user", "");
+                        cm.room_id = msg.value("room_id", "");
                         new_messages.push_back(cm);
                     }
                     last_message_count_ += messages.size();

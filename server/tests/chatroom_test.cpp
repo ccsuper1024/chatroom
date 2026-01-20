@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include "chatroom_server.h"
 #include "metrics_collector.h"
+#include "server_config.h"
+#include "database_manager.h"
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -8,6 +10,17 @@ using json = nlohmann::json;
 class ChatRoomServerTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        // Setup config for test
+        auto& config = ServerConfig::instance();
+        config.db.type = "sqlite";
+        config.db.path = ":memory:"; // Use in-memory DB for tests
+        config.rate_limit.enabled = true; // Ensure rate limit is enabled for testing
+        config.rate_limit.max_requests = 60;
+        config.rate_limit.window_seconds = 60;
+
+        // Init DB
+        DatabaseManager::instance().init(config.db);
+
         server_ = std::make_unique<ChatRoomServer>(8080);
     }
 
@@ -131,4 +144,40 @@ TEST_F(ChatRoomServerTest, MetricsCollectorIntegration) {
     EXPECT_EQ(metrics["requests"]["POST /login"], 1);
     EXPECT_EQ(metrics["requests"]["POST /send"], 1);
     EXPECT_EQ(metrics["message_count"], 1);
+}
+
+TEST_F(ChatRoomServerTest, PrivateMessageTest) {
+    // 1. User A sends private message to User B
+    json send_body;
+    send_body["username"] = "UserA";
+    send_body["content"] = "Secret for B";
+    send_body["target_user"] = "UserB";
+    
+    HttpResponse resp = CallHandleSendMessage(send_body.dump());
+    EXPECT_EQ(resp.status_code, 200);
+
+    // 2. User B fetches messages
+    HttpResponse respB = CallHandleGetMessages("/messages?since=0&username=UserB");
+    auto bodyB = json::parse(respB.body);
+    EXPECT_TRUE(bodyB["success"]);
+    bool found = false;
+    for (const auto& msg : bodyB["messages"]) {
+        if (msg["content"] == "Secret for B" && msg.contains("target_user") && msg["target_user"] == "UserB") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found);
+
+    // 3. User C fetches messages (should not see it)
+    HttpResponse respC = CallHandleGetMessages("/messages?since=0&username=UserC");
+    auto bodyC = json::parse(respC.body);
+    bool foundC = false;
+    for (const auto& msg : bodyC["messages"]) {
+        if (msg["content"] == "Secret for B") {
+            foundC = true;
+            break;
+        }
+    }
+    EXPECT_FALSE(foundC);
 }

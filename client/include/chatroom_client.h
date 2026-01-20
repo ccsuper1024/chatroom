@@ -13,6 +13,8 @@ struct ClientMessage {
     std::string username;
     std::string content;
     std::string timestamp;
+    std::string target_user;
+    std::string room_id;
 };
 
 /**
@@ -26,7 +28,7 @@ public:
     bool login(const std::string& username);
     
     // 发送消息
-    bool sendMessage(const std::string& content);
+    bool sendMessage(const std::string& content, const std::string& target_user = "", const std::string& room_id = "");
     
     // 获取新消息
     std::vector<ClientMessage> getMessages();

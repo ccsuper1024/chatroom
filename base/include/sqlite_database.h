@@ -12,8 +12,8 @@ public:
 
     bool init(const DatabaseConfig& config) override;
     bool addMessage(const ChatMessage& msg) override;
-    std::vector<ChatMessage> getHistory(int limit) override;
-    std::vector<ChatMessage> getMessagesAfter(long long last_id) override;
+    std::vector<ChatMessage> getHistory(int limit, const std::string& username = "") override;
+    std::vector<ChatMessage> getMessagesAfter(long long last_id, const std::string& username = "") override;
     long long getMessageCount() override;
 
 private:

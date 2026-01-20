@@ -1,5 +1,4 @@
 #pragma once
-#include <string>
 #include <vector>
 #include "chat_message.h"
 #include "database_config.h"
@@ -14,11 +13,11 @@ public:
     // Add a new message
     virtual bool addMessage(const ChatMessage& msg) = 0;
     
-    // Get message history (limit count)
-    virtual std::vector<ChatMessage> getHistory(int limit) = 0;
+    // Get message history (limit count, optionally filter for a user)
+    virtual std::vector<ChatMessage> getHistory(int limit, const std::string& username = "") = 0;
     
-    // Get messages after a specific ID
-    virtual std::vector<ChatMessage> getMessagesAfter(long long last_id) = 0;
+    // Get messages after a specific ID (optionally filter for a user)
+    virtual std::vector<ChatMessage> getMessagesAfter(long long last_id, const std::string& username = "") = 0;
     
     // Get total message count
     virtual long long getMessageCount() = 0;

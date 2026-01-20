@@ -29,16 +29,16 @@ bool DatabaseManager::addMessage(const ChatMessage& msg) {
     return db_->addMessage(msg);
 }
 
-std::vector<ChatMessage> DatabaseManager::getHistory(int limit) {
+std::vector<ChatMessage> DatabaseManager::getHistory(int limit, const std::string& username) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!db_) return {};
-    return db_->getHistory(limit);
+    return db_->getHistory(limit, username);
 }
 
-std::vector<ChatMessage> DatabaseManager::getMessagesAfter(long long last_id) {
+std::vector<ChatMessage> DatabaseManager::getMessagesAfter(long long last_id, const std::string& username) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!db_) return {};
-    return db_->getMessagesAfter(last_id);
+    return db_->getMessagesAfter(last_id, username);
 }
 
 long long DatabaseManager::getMessageCount() {

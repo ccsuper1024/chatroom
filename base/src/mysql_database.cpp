@@ -1,6 +1,5 @@
 #include "mysql_database.h"
 #include "logger.h"
-#include <iostream>
 #include <sstream>
 
 MysqlDatabase::MysqlDatabase() : current_pool_size_(0), initialized_(false) {
@@ -67,13 +66,23 @@ bool MysqlDatabase::init(const DatabaseConfig& config) {
                       "id BIGINT PRIMARY KEY AUTO_INCREMENT,"
                       "username VARCHAR(255) NOT NULL,"
                       "content TEXT NOT NULL,"
-                      "timestamp VARCHAR(64) NOT NULL"
+                      "timestamp VARCHAR(64) NOT NULL,"
+                      "target_user VARCHAR(255),"
+                      "room_id VARCHAR(255)"
                       ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
                       
     if (mysql_query(conn, sql)) {
         LOG_ERROR("MySQL create table error: {}", mysql_error(conn));
         return false;
     }
+
+    // Attempt to add columns if they don't exist (migration for existing DB)
+    // We ignore errors because if column exists, it will fail, which is fine.
+    const char* alter_sql1 = "ALTER TABLE messages ADD COLUMN target_user VARCHAR(255);";
+    mysql_query(conn, alter_sql1); 
+
+    const char* alter_sql2 = "ALTER TABLE messages ADD COLUMN room_id VARCHAR(255);";
+    mysql_query(conn, alter_sql2); 
 
     initialized_ = true;
     LOG_INFO("MySQL Database initialized successfully with {} connections", current_pool_size_);
@@ -134,11 +143,29 @@ bool MysqlDatabase::addMessage(const ChatMessage& msg) {
     mysql_real_escape_string(conn, escaped_content, msg.content.c_str(), msg.content.length());
     mysql_real_escape_string(conn, escaped_timestamp, msg.timestamp.c_str(), msg.timestamp.length());
 
+    std::string target_val = "NULL";
+    if (!msg.target_user.empty()) {
+        char* escaped_target = new char[msg.target_user.length() * 2 + 1];
+        mysql_real_escape_string(conn, escaped_target, msg.target_user.c_str(), msg.target_user.length());
+        target_val = "'" + std::string(escaped_target) + "'";
+        delete[] escaped_target;
+    }
+
+    std::string room_val = "NULL";
+    if (!msg.room_id.empty()) {
+        char* escaped_room = new char[msg.room_id.length() * 2 + 1];
+        mysql_real_escape_string(conn, escaped_room, msg.room_id.c_str(), msg.room_id.length());
+        room_val = "'" + std::string(escaped_room) + "'";
+        delete[] escaped_room;
+    }
+
     std::stringstream ss;
-    ss << "INSERT INTO messages (username, content, timestamp) VALUES ('"
+    ss << "INSERT INTO messages (username, content, timestamp, target_user, room_id) VALUES ('"
        << escaped_username << "', '"
        << escaped_content << "', '"
-       << escaped_timestamp << "')";
+       << escaped_timestamp << "', "
+       << target_val << ", "
+       << room_val << ")";
     
     std::string sql = ss.str();
     
@@ -156,15 +183,28 @@ bool MysqlDatabase::addMessage(const ChatMessage& msg) {
     return success;
 }
 
-std::vector<ChatMessage> MysqlDatabase::getHistory(int limit) {
+std::vector<ChatMessage> MysqlDatabase::getHistory(int limit, const std::string& username) {
     std::vector<ChatMessage> history;
     if (!initialized_) return history;
     
     MYSQL* conn = getConnection();
     if (!conn) return history;
 
-    std::string sql = "SELECT id, username, content, timestamp FROM ("
-                      "SELECT * FROM messages ORDER BY id DESC LIMIT " + std::to_string(limit) + ") "
+    std::string where_clause;
+    if (username.empty()) {
+        where_clause = " WHERE (target_user IS NULL OR target_user = '')";
+    } else {
+        char* escaped_user = new char[username.length() * 2 + 1];
+        mysql_real_escape_string(conn, escaped_user, username.c_str(), username.length());
+        std::string u(escaped_user);
+        delete[] escaped_user;
+        
+        where_clause = " WHERE (target_user IS NULL OR target_user = '' OR target_user = '" + u + "' OR username = '" + u + "')";
+    }
+
+    // Use specific columns to ensure order match
+    std::string sql = "SELECT id, username, content, timestamp, target_user, room_id FROM ("
+                      "SELECT * FROM messages" + where_clause + " ORDER BY id DESC LIMIT " + std::to_string(limit) + ") "
                       "AS sub ORDER BY id ASC";
 
     if (mysql_query(conn, sql.c_str())) {
@@ -187,6 +227,8 @@ std::vector<ChatMessage> MysqlDatabase::getHistory(int limit) {
         msg.username = row[1] ? row[1] : "";
         msg.content = row[2] ? row[2] : "";
         msg.timestamp = row[3] ? row[3] : "";
+        msg.target_user = row[4] ? row[4] : "";
+        msg.room_id = row[5] ? row[5] : "";
         history.push_back(msg);
     }
     
@@ -195,15 +237,27 @@ std::vector<ChatMessage> MysqlDatabase::getHistory(int limit) {
     return history;
 }
 
-std::vector<ChatMessage> MysqlDatabase::getMessagesAfter(long long last_id) {
+std::vector<ChatMessage> MysqlDatabase::getMessagesAfter(long long last_id, const std::string& username) {
     std::vector<ChatMessage> history;
     if (!initialized_) return history;
     
     MYSQL* conn = getConnection();
     if (!conn) return history;
 
-    std::string sql = "SELECT id, username, content, timestamp FROM messages WHERE id > " + 
-                      std::to_string(last_id) + " ORDER BY id ASC";
+    std::string where_clause;
+    if (username.empty()) {
+        where_clause = " AND (target_user IS NULL OR target_user = '')";
+    } else {
+        char* escaped_user = new char[username.length() * 2 + 1];
+        mysql_real_escape_string(conn, escaped_user, username.c_str(), username.length());
+        std::string u(escaped_user);
+        delete[] escaped_user;
+        
+        where_clause = " AND (target_user IS NULL OR target_user = '' OR target_user = '" + u + "' OR username = '" + u + "')";
+    }
+
+    std::string sql = "SELECT id, username, content, timestamp, target_user, room_id FROM messages WHERE id > " + 
+                      std::to_string(last_id) + where_clause + " ORDER BY id ASC";
 
     if (mysql_query(conn, sql.c_str())) {
         LOG_ERROR("MySQL query error: {}", mysql_error(conn));
@@ -225,6 +279,8 @@ std::vector<ChatMessage> MysqlDatabase::getMessagesAfter(long long last_id) {
         msg.username = row[1] ? row[1] : "";
         msg.content = row[2] ? row[2] : "";
         msg.timestamp = row[3] ? row[3] : "";
+        msg.target_user = row[4] ? row[4] : "";
+        msg.room_id = row[5] ? row[5] : "";
         history.push_back(msg);
     }
     

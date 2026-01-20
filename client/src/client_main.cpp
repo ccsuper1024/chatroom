@@ -23,9 +23,14 @@ void receiveMessages(ChatRoomClient& client) {
         client.sendHeartbeat();
         auto messages = client.getMessages();
         for (const auto& msg : messages) {
-            std::cout << "[" << msg.timestamp << "] " 
-                      << msg.username << ": " 
-                      << msg.content << std::endl;
+            std::cout << "[" << msg.timestamp << "] ";
+            if (!msg.target_user.empty()) {
+                std::cout << "[私聊] " << msg.username << " -> " << msg.target_user << ": " << msg.content << std::endl;
+            } else if (!msg.room_id.empty()) {
+                std::cout << "[房间 " << msg.room_id << "] " << msg.username << ": " << msg.content << std::endl;
+            } else {
+                std::cout << msg.username << ": " << msg.content << std::endl;
+            }
         }
         // 使用更短的sleep间隔以便更快响应退出信号
         for (int i = 0; i < cfg.interval_seconds * 10 && g_running; ++i) {
@@ -39,6 +44,8 @@ void printHelp() {
     std::cout << "/help   - 显示此帮助信息" << std::endl;
     std::cout << "/users  - 显示在线用户列表" << std::endl;
     std::cout << "/stats  - 显示服务器统计信息" << std::endl;
+    std::cout << "/msg <用户> <内容> - 发送私聊消息" << std::endl;
+    std::cout << "/room <房间> <内容> - 发送房间消息" << std::endl;
     std::cout << "/quit   - 退出聊天室" << std::endl;
     std::cout << "直接输入文本发送消息" << std::endl;
     std::cout << "================" << std::endl;
@@ -117,6 +124,34 @@ int main(int argc, char* argv[]) {
                 } else if (input == "/stats") {
                     std::string stats = client.getStats();
                     std::cout << "\n=== 服务器统计 ===\n" << stats << "\n==================" << std::endl;
+                } else if (input.rfind("/msg ", 0) == 0) {
+                    std::istringstream iss(input);
+                    std::string cmd, target, content;
+                    iss >> cmd >> target;
+                    std::getline(iss, content);
+                    if (content.size() > 0 && content[0] == ' ') content = content.substr(1);
+                    
+                    if (!target.empty() && !content.empty()) {
+                        if (!client.sendMessage(content, target, "")) {
+                            std::cerr << "发送私聊失败！" << std::endl;
+                        }
+                    } else {
+                        std::cout << "用法: /msg <用户名> <内容>" << std::endl;
+                    }
+                } else if (input.rfind("/room ", 0) == 0) {
+                    std::istringstream iss(input);
+                    std::string cmd, room, content;
+                    iss >> cmd >> room;
+                    std::getline(iss, content);
+                    if (content.size() > 0 && content[0] == ' ') content = content.substr(1);
+                    
+                    if (!room.empty() && !content.empty()) {
+                        if (!client.sendMessage(content, "", room)) {
+                            std::cerr << "发送房间消息失败！" << std::endl;
+                        }
+                    } else {
+                        std::cout << "用法: /room <房间号> <内容>" << std::endl;
+                    }
                 } else {
                     std::cout << "未知命令，输入 /help 查看可用命令" << std::endl;
                 }
