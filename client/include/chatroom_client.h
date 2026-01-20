@@ -19,6 +19,12 @@ public:
     // 获取新消息
     std::vector<std::string> getMessages();
     
+    // 获取在线用户列表
+    std::string getUsers();
+
+    // 获取服务器统计信息
+    std::string getStats();
+
     // 获取用户名
     std::string getUsername() const { return username_; }
 

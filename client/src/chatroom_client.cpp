@@ -151,6 +151,24 @@ std::vector<std::string> ChatRoomClient::getMessages() {
     return new_messages;
 }
 
+std::string ChatRoomClient::getUsers() {
+    try {
+        return sendHttpRequest("GET", "/users");
+    } catch (const std::exception& e) {
+        LOG_ERROR("获取用户列表失败: {}", e.what());
+        return "{\"error\": \"获取用户列表失败\"}";
+    }
+}
+
+std::string ChatRoomClient::getStats() {
+    try {
+        return sendHttpRequest("GET", "/metrics");
+    } catch (const std::exception& e) {
+        LOG_ERROR("获取统计信息失败: {}", e.what());
+        return "{\"error\": \"获取统计信息失败\"}";
+    }
+}
+
 bool ChatRoomClient::sendHeartbeat() {
     try {
         HeartbeatConfig cfg = getHeartbeatConfig();
