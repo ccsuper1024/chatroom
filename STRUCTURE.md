@@ -80,6 +80,35 @@ chatroom/
 - **Slave Loops**: 负责 `TcpConnection` 的 IO 读写。
 - **Task Queue**: 业务逻辑在 EventLoop 线程中安全执行。
 
+## 🧭 架构重构与模块化演进计划
+
+> 以下步骤用于规划后续对服务器架构的重构与扩展，保持与现有功能兼容，同时为 SIP/FTP、UDP 组播/广播以及 eventfd/timerfd/signalfd 打下基础。
+
+1. 抽象协议会话层（IProtocolSession）
+   - 在 net 层定义统一的 ProtocolType 和 IProtocolSession 接口。
+   - 将当前 Http/WebSocket/RTSP 的解析与处理逻辑从 TcpConnection 中移出，改为对应的 *Session 类实现。
+   - 在 TcpConnection 中仅保留字节流读写与协议探测（ProtocolDetector），探测后交给具体 Session 处理。
+
+2. 聊天业务服务化（ChatService + SessionManager）
+   - 将 /login、/send、/messages、/users、/heartbeat 的纯业务逻辑集中到 ChatService。
+   - ChatRoomServer 只负责组装 HttpServer / WebSocket / RTSP 与 ChatService/SessionManager。
+   - 为未来 SIP/FTP 等协议通过统一业务接口接入做准备。
+
+3. 统一 fd 抽象与事件源
+   - 在 net 层增加 UdpSocket 封装，支持 UDP 单播、广播、组播。
+   - 增加 TimerFd、EventFd、SignalFd 封装，并通过 Channel 注册到 EventLoop。
+   - 用 timerfd 替换当前基于线程的周期任务（如会话清理），实现真正“完全 fd 化”的事件循环。
+
+4. 协议模块扩展（SIP / FTP）
+   - 新增 sip/ 与 ftp/ 协议目录，分别实现 SipSession/FtpSession 与对应 codec。
+   - 在协议探测器中识别 SIP/FTP 首包，创建对应 Session，并通过统一业务接口调用 ChatService。
+   - 保持 HTTP/WebSocket/RTSP 行为不变，逐步添加 SIP/FTP 相关测试用例。
+
+5. 测试与迁移策略
+   - 为 SessionManager、ChatService、各协议 Session 编写单元测试，独立于 socket 层。
+   - 保留现有集成测试（chatroom_test、protocol_test），在重构过程中持续跑回归测试。
+   - 每完成一步重构，先保证编译与测试通过，再继续下一步，避免大爆炸式修改。
+
 ## 📋 CMake结构
 
 ### 顶层 CMakeLists.txt
