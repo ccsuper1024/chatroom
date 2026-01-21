@@ -5,17 +5,17 @@
 #include <csignal>
 #include <memory>
 
-ChatRoomServer* g_server = nullptr;
-
-void signalHandler(int signum) {
-    LOG_INFO("收到信号 {}, 正在关闭服务器...", signum);
-    if (g_server) {
-        g_server->stop();
-    }
-    exit(signum);
-}
-
 int main(int argc, char* argv[]) {
+    // Block signals globally so they can be handled by SignalFd in ChatRoomServer
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTERM);
+    if (pthread_sigmask(SIG_BLOCK, &mask, nullptr) != 0) {
+        perror("pthread_sigmask");
+        return 1;
+    }
+
     // Load configuration
     ServerConfig::instance().load("conf/server.yaml");
 
@@ -33,15 +33,9 @@ int main(int argc, char* argv[]) {
     LOG_INFO("===== 聊天室服务器 =====");
     LOG_INFO("端口: {}", ServerConfig::instance().port);
     
-    // 注册信号处理器
-    signal(SIGINT, signalHandler);
-    signal(SIGTERM, signalHandler);
-    
     try {
         ChatRoomServer server(ServerConfig::instance().port);
-        g_server = &server;
         server.start();
-        g_server = nullptr;
     } catch (const std::exception& e) {
         LOG_ERROR("服务器异常: {}", e.what());
         return 1;

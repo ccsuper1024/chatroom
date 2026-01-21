@@ -1,13 +1,16 @@
 #include "chatroom/session_manager.h"
 #include "utils/server_config.h"
 #include "logger.h"
+#include "net/tcp_connection.h"
 #include <sstream>
 #include <iomanip>
 
 static std::atomic<unsigned long long> g_connection_counter{0};
 
-SessionManager::SessionManager(std::shared_ptr<MetricsCollector> metrics)
-    : metrics_collector_(metrics), running_(false) {
+SessionManager::SessionManager(EventLoop* loop, std::shared_ptr<MetricsCollector> metrics)
+    : loop_(loop), metrics_collector_(metrics) {
+    timer_ = std::make_unique<TimerFd>(loop_);
+    timer_->setCallback([this]() { cleanup(); });
 }
 
 SessionManager::~SessionManager() {
@@ -15,15 +18,13 @@ SessionManager::~SessionManager() {
 }
 
 void SessionManager::start() {
-    running_.store(true);
-    cleanup_thread_ = std::thread([this]() { cleanupLoop(); });
+    int interval_sec = ServerConfig::instance().session_cleanup_interval_seconds;
+    timer_->start(interval_sec * 1000, interval_sec * 1000);
 }
 
 void SessionManager::stop() {
-    running_.store(false);
-    cleanup_cv_.notify_all();
-    if (cleanup_thread_.joinable()) {
-        cleanup_thread_.join();
+    if (timer_) {
+        timer_->stop();
     }
 }
 
@@ -59,6 +60,21 @@ SessionManager::LoginResult SessionManager::login(const std::string& username) {
     return {true, "", connection_id};
 }
 
+void SessionManager::registerSipSession(const std::string& username, std::shared_ptr<TcpConnection> conn) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sip_sessions_[username] = conn;
+    LOG_INFO("Registered SIP session for user: {}", username);
+}
+
+std::shared_ptr<TcpConnection> SessionManager::getSipConnection(const std::string& username) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = sip_sessions_.find(username);
+    if (it != sip_sessions_.end()) {
+        return it->second.lock();
+    }
+    return nullptr;
+}
+
 bool SessionManager::updateHeartbeat(const std::string& connection_id, const std::string& client_version) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = sessions_.find(connection_id);
@@ -89,30 +105,30 @@ std::vector<UserSession> SessionManager::getAllSessions() {
     return result;
 }
 
-void SessionManager::cleanupLoop() {
+void SessionManager::cleanup() {
     using namespace std::chrono;
-    int interval = ServerConfig::instance().session_cleanup_interval_seconds;
     int timeout = ServerConfig::instance().heartbeat_timeout_seconds;
     
-    while (running_.load()) {
-        {
-            std::unique_lock<std::mutex> lock(cleanup_mutex_);
-            cleanup_cv_.wait_for(lock, std::chrono::seconds(interval), 
-                [this]{ return !running_.load(); });
+    auto now = system_clock::now();
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto it = sessions_.begin(); it != sessions_.end();) {
+        auto diff = duration_cast<seconds>(now - it->second.last_heartbeat).count();
+        if (diff > timeout) {
+            LOG_INFO("移除超时会话: {} {}", it->second.username, it->second.connection_id);
+            it = sessions_.erase(it);
+        } else {
+            ++it;
         }
-        if (!running_.load()) break;
-
-        auto now = system_clock::now();
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (auto it = sessions_.begin(); it != sessions_.end();) {
-            auto diff = duration_cast<seconds>(now - it->second.last_heartbeat).count();
-            if (diff > timeout) {
-                LOG_INFO("移除超时会话: {} {}", it->second.username, it->second.connection_id);
-                it = sessions_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        metrics_collector_->updateActiveSessions(sessions_.size());
     }
+
+    // Cleanup expired SIP sessions
+    for (auto it = sip_sessions_.begin(); it != sip_sessions_.end();) {
+        if (it->second.expired()) {
+            it = sip_sessions_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    metrics_collector_->updateActiveSessions(sessions_.size());
 }

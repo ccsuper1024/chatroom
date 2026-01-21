@@ -346,3 +346,127 @@ TEST_F(ChatRoomServerTest, RtspOptionsAndDescribe) {
     
     close(fds[1]);
 }
+
+TEST_F(ChatRoomServerTest, SipRegisterAndInvite) {
+    EventLoop loop;
+    int fds[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
+    fcntl(fds[0], F_SETFL, O_NONBLOCK);
+    fcntl(fds[1], F_SETFL, O_NONBLOCK);
+
+    auto conn1 = std::make_shared<TcpConnection>(GetHttpServer(), &loop, fds[0], "127.0.0.1");
+
+    // 1. Send REGISTER
+    std::string register_req = 
+        "REGISTER sip:alice@example.com SIP/2.0\r\n"
+        "Via: SIP/2.0/TCP client.example.com:5060;branch=z9hG4bK776asdhds\r\n"
+        "Max-Forwards: 70\r\n"
+        "From: Alice <sip:alice@example.com>;tag=1928301774\r\n"
+        "To: Alice <sip:alice@example.com>\r\n"
+        "Call-ID: a84b4c76e66710\r\n"
+        "CSeq: 1 REGISTER\r\n"
+        "Contact: <sip:alice@127.0.0.1:5060>\r\n"
+        "Content-Length: 0\r\n"
+        "\r\n";
+    
+    write(fds[1], register_req.data(), register_req.size());
+    
+    // Process
+    conn1->handleRead();
+    conn1->handleWrite(); // Flush
+    
+    char buf[4096];
+    int n = read(fds[1], buf, sizeof(buf));
+    ASSERT_GT(n, 0);
+    std::string resp(buf, n);
+    ASSERT_TRUE(resp.find("SIP/2.0 200 OK") != std::string::npos);
+
+    // 2. Setup second connection for Bob
+    int fds2[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds2), 0);
+    fcntl(fds2[0], F_SETFL, O_NONBLOCK);
+    fcntl(fds2[1], F_SETFL, O_NONBLOCK);
+    auto conn2 = std::make_shared<TcpConnection>(GetHttpServer(), &loop, fds2[0], "127.0.0.2");
+
+    // Bob REGISTER
+    std::string register_bob = 
+        "REGISTER sip:bob@example.com SIP/2.0\r\n"
+        "From: Bob <sip:bob@example.com>;tag=123\r\n"
+        "Content-Length: 0\r\n"
+        "\r\n";
+    write(fds2[1], register_bob.data(), register_bob.size());
+    conn2->handleRead();
+    conn2->handleWrite();
+    n = read(fds2[1], buf, sizeof(buf));
+    ASSERT_GT(n, 0);
+    resp.assign(buf, n);
+    ASSERT_TRUE(resp.find("SIP/2.0 200 OK") != std::string::npos);
+
+    // 3. Alice invites Bob
+    std::string invite_req = 
+        "INVITE sip:bob@example.com SIP/2.0\r\n"
+        "Via: SIP/2.0/TCP client.example.com:5060;branch=z9hG4bK776\r\n"
+        "From: Alice <sip:alice@example.com>;tag=1928301774\r\n"
+        "To: Bob <sip:bob@example.com>\r\n"
+        "Call-ID: a84b4c76e66710\r\n"
+        "CSeq: 2 INVITE\r\n"
+        "Content-Length: 0\r\n"
+        "\r\n";
+
+    write(fds[1], invite_req.data(), invite_req.size());
+    conn1->handleRead(); 
+    
+    // conn2 should have data to write (the forwarded INVITE)
+    conn2->handleWrite(); 
+    
+    // Read from fds2[1] (Bob's client side)
+    n = read(fds2[1], buf, sizeof(buf));
+    ASSERT_GT(n, 0);
+    std::string bob_recv(buf, n);
+    // Bob should receive the raw INVITE
+    ASSERT_TRUE(bob_recv.find("INVITE sip:bob@example.com SIP/2.0") != std::string::npos);
+
+    close(fds[1]);
+    close(fds2[1]);
+}
+
+TEST_F(ChatRoomServerTest, FtpLoginTest) {
+    EventLoop loop;
+    int fds[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
+    fcntl(fds[0], F_SETFL, O_NONBLOCK);
+    fcntl(fds[1], F_SETFL, O_NONBLOCK);
+
+    auto conn = std::make_shared<TcpConnection>(GetHttpServer(), &loop, fds[0], "127.0.0.1");
+
+    // Client sends USER command to trigger detection and session creation
+    std::string user_cmd = "USER anonymous\r\n";
+    write(fds[1], user_cmd.data(), user_cmd.size());
+
+    // Server process
+    conn->handleRead();
+    conn->handleWrite(); // Flush
+
+    char buf[4096];
+    int n = read(fds[1], buf, sizeof(buf));
+    ASSERT_GT(n, 0);
+    std::string resp(buf, n);
+    
+    // Check for greeting (220) and USER response (331)
+    // Note: They might come in one packet or separate
+    EXPECT_TRUE(resp.find("220 Service ready") != std::string::npos);
+    EXPECT_TRUE(resp.find("331 User name okay") != std::string::npos);
+
+    // Send PASS
+    std::string pass_cmd = "PASS guest\r\n";
+    write(fds[1], pass_cmd.data(), pass_cmd.size());
+    conn->handleRead();
+    conn->handleWrite();
+    
+    n = read(fds[1], buf, sizeof(buf));
+    ASSERT_GT(n, 0);
+    resp.assign(buf, n);
+    EXPECT_TRUE(resp.find("230 User logged in") != std::string::npos);
+
+    close(fds[1]);
+}
