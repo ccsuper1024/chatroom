@@ -2,6 +2,7 @@
 
 #include <string>
 #include <map>
+#include "net/buffer.h"
 
 struct HttpRequest {
     std::string method;
@@ -20,7 +21,8 @@ struct HttpResponse {
     std::map<std::string, std::string> headers;
 };
 
-HttpRequest parseRequestFromBuffer(std::string& buffer, bool& complete, bool& bad_request);
+// Zero-copy optimized parsing
+HttpRequest parseRequestFromBuffer(Buffer* buf, bool& complete, bool& bad_request);
 
 std::string buildResponse(const HttpResponse& response);
 

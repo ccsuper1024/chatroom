@@ -18,6 +18,7 @@ struct ThreadPoolConfig {
     std::size_t core_threads = 0;
     std::size_t max_threads = 0;
     std::size_t queue_capacity = 1024;
+    std::size_t io_threads = 0; // 0 means loop in main thread
 };
 
 struct RateLimitConfig {

@@ -38,6 +38,11 @@ bool ServerConfig::load(const std::string &config_file) {
       thread_pool.max_threads =
           std::max<std::size_t>(thread_pool.core_threads, hw * 2);
     }
+    if (thread_pool.io_threads == 0) {
+        std::size_t hw = std::thread::hardware_concurrency();
+        if (hw == 0) hw = 4;
+        thread_pool.io_threads = hw;
+    }
     return false;
   }
 
@@ -73,6 +78,8 @@ bool ServerConfig::load(const std::string &config_file) {
         thread_pool.max_threads = std::stoul(value);
       } else if (key == "thread_queue_capacity") {
         thread_pool.queue_capacity = std::stoul(value);
+      } else if (key == "io_threads") {
+        thread_pool.io_threads = std::stoul(value);
       } else if (key == "check_interval_seconds") {
         connection_check_interval_seconds = std::stoi(value);
       } else if (key == "max_failures") {

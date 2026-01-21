@@ -69,3 +69,12 @@ private:
         spdlog::level::debug, \
         spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, \
         fmt, ##__VA_ARGS__)
+
+#define LOG_FATAL(fmt, ...) \
+    do { \
+        Logger::instance().logWithLocation( \
+            spdlog::level::critical, \
+            spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, \
+            fmt, ##__VA_ARGS__); \
+        std::abort(); \
+    } while(0)

@@ -1,257 +1,251 @@
 #include "net/tcp_connection.h"
-#include "http/http_server.h"
 #include "net/event_loop.h"
 #include "net/channel.h"
-#include "http/http_codec.h"
-#include "rtsp/rtsp_codec.h"
-#include "utils/server_error.h"
+#include "logger.h"
 
-#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <errno.h>
 
-static constexpr size_t kMaxRequestSize = 10 * 1024 * 1024;
-
-TcpConnection::TcpConnection(HttpServer* server, EventLoop* loop, int fd, const std::string& ip)
-    : server_(server),
-      loop_(loop),
-      fd_(fd),
-      ip_(ip),
-      closed_(false) {
-    auto ch = std::make_unique<Channel>(loop_, fd_);
-    ch->setEvents(EPOLLIN | EPOLLET);
-    ch->setReadCallback([this]() {
-        handleRead();
-    });
-    ch->setWriteCallback([this]() {
-        handleWrite();
-    });
-    ch->setCloseCallback([this]() {
-        handleClose();
-    });
-    channel_ = std::move(ch);
+void defaultConnectionCallback(const TcpConnectionPtr& conn) {
+    LOG_INFO("{} -> {} is {}",
+             conn->localAddress().toIpPort(),
+             conn->peerAddress().toIpPort(),
+             (conn->connected() ? "UP" : "DOWN"));
 }
 
-void TcpConnection::connectEstablished() {
-    loop_->runInLoop([this]() {
-        loop_->addChannel(channel_.get());
-    });
+void defaultMessageCallback(const TcpConnectionPtr&,
+                            Buffer* buf,
+                            Timestamp) {
+    buf->retrieveAll();
+}
+
+TcpConnection::TcpConnection(EventLoop* loop,
+                             const std::string& nameArg,
+                             int sockfd,
+                             const InetAddress& localAddr,
+                             const InetAddress& peerAddr)
+    : loop_(loop),
+      name_(nameArg),
+      state_(kConnecting),
+      reading_(true),
+      channel_(new Channel(loop, sockfd)),
+      localAddr_(localAddr),
+      peerAddr_(peerAddr),
+      highWaterMark_(64 * 1024 * 1024) {
+    
+    channel_->setReadCallback(std::bind(&TcpConnection::handleRead, this));
+    channel_->setWriteCallback(std::bind(&TcpConnection::handleWrite, this));
+    channel_->setCloseCallback(std::bind(&TcpConnection::handleClose, this));
+    channel_->setErrorCallback(std::bind(&TcpConnection::handleError, this));
+    
+    LOG_DEBUG("TcpConnection::ctor[{}] at fd={}", name_, sockfd);
+    
+    // Default callbacks
+    // connectionCallback_ = defaultConnectionCallback;
+    // messageCallback_ = defaultMessageCallback;
 }
 
 TcpConnection::~TcpConnection() {
-    shutdown();
+    LOG_DEBUG("TcpConnection::dtor[{}] at fd={} state={}", 
+              name_, channel_->fd(), (int)state_);
+    assert(state_ == kDisconnected);
 }
 
-int TcpConnection::fd() const {
-    return fd_;
-}
-
-bool TcpConnection::closed() const {
-    return closed_;
-}
-
-void TcpConnection::handleRead() {
-    if (closed_) {
-        return;
-    }
-
-    char buffer[4096];
-    while (true) {
-        ssize_t n = ::recv(fd_, buffer, sizeof(buffer), 0);
-        if (n > 0) {
-            read_buffer_.append(buffer, static_cast<std::size_t>(n));
-            if (read_buffer_.size() > kMaxRequestSize) {
-                HttpResponse resp = CreateErrorResponse(ErrorCode::PAYLOAD_TOO_LARGE);
-                std::string resp_str = buildResponse(resp);
-                appendResponse(resp_str);
-                setCloseAfterWrite(true);
-                return;
-            }
-        } else if (n == 0) {
-            server_->closeConnection(fd_);
-            return;
+void TcpConnection::send(const std::string& message) {
+    if (state_ == kConnected) {
+        if (loop_->isInLoopThread()) {
+            sendInLoop(message);
         } else {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break;
-            } else {
-                server_->closeConnection(fd_);
-                return;
-            }
+            loop_->runInLoop([this, message]() {
+                sendInLoop(message);
+            });
         }
     }
+}
 
-    if (protocol_ == Protocol::HTTP) {
-        // Check for RTSP signature
-        if (read_buffer_.find("RTSP/1.0") != std::string::npos) {
-            protocol_ = Protocol::RTSP;
+void TcpConnection::send(Buffer* message) {
+    if (state_ == kConnected) {
+        if (loop_->isInLoopThread()) {
+            sendInLoop(message->peek(), message->readableBytes());
+            message->retrieveAll();
         } else {
-            bool loop = true;
-            while (loop) {
-                bool complete = false;
-                bool bad = false;
-                HttpRequest req = parseRequestFromBuffer(read_buffer_, complete, bad);
-                if (bad) {
-                    HttpResponse resp = CreateErrorResponse(ErrorCode::INVALID_REQUEST);
-                    std::string resp_str = buildResponse(resp);
-                    appendResponse(resp_str);
-                    setCloseAfterWrite(true);
-                    break;
-                }
-                if (!complete) {
-                    loop = false;
-                    break;
-                }
-
-                req.remote_ip = ip_;
-                
-                // Check for WebSocket Upgrade
-                auto itUpgrade = req.headers.find("Upgrade");
-                if (itUpgrade != req.headers.end() && itUpgrade->second == "websocket") {
-                    auto itKey = req.headers.find("Sec-WebSocket-Key");
-                    if (itKey != req.headers.end()) {
-                        std::string acceptKey = protocols::WebSocketCodec::computeAcceptKey(itKey->second);
-                        
-                        HttpResponse resp;
-                        resp.status_code = 101;
-                        resp.status_text = "Switching Protocols";
-                        resp.headers["Upgrade"] = "websocket";
-                        resp.headers["Connection"] = "Upgrade";
-                        resp.headers["Sec-WebSocket-Accept"] = acceptKey;
-                        
-                        std::string respStr = buildResponse(resp);
-                        send(respStr);
-                        
-                        protocol_ = Protocol::WEBSOCKET;
-                        // Stop HTTP processing loop, proceed to WS processing if buffer has data
-                        loop = false;
-                    }
-                } else {
-                    server_->handleHttpRequest(shared_from_this(), req);
-                }
-            }
-        }
-    }
-    
-    if (protocol_ == Protocol::WEBSOCKET) {
-        while (read_buffer_.size() > 0) {
-            protocols::WebSocketFrame frame;
-            std::vector<uint8_t> buf(read_buffer_.begin(), read_buffer_.end());
-            int consumed = protocols::WebSocketCodec::parseFrame(buf, frame);
-            
-            if (consumed < 0) {
-                server_->closeConnection(fd_);
-                return;
-            }
-            if (consumed == 0) {
-                break;
-            }
-            
-            read_buffer_.erase(0, consumed);
-            
-            if (frame.opcode == protocols::WebSocketOpcode::CLOSE) {
-                server_->closeConnection(fd_);
-                return;
-            } else if (frame.opcode == protocols::WebSocketOpcode::PING) {
-                auto pong = protocols::WebSocketCodec::buildFrame(protocols::WebSocketOpcode::PONG, frame.payload);
-                std::string pongStr(pong.begin(), pong.end());
-                send(pongStr);
-            } else {
-                server_->handleWebSocketMessage(shared_from_this(), frame);
-            }
-        }
-    }
-
-    if (protocol_ == Protocol::RTSP) {
-        while (read_buffer_.size() > 0) {
-            protocols::RtspRequest req;
-            size_t consumed = protocols::RtspCodec::parseRequest(read_buffer_, req);
-            
-            if (consumed == 0) {
-                break;
-            }
-            
-            read_buffer_.erase(0, consumed);
-            
-            server_->handleRtspMessage(shared_from_this(), req);
+            // Copy data for cross-thread safety
+            std::string d(message->peek(), message->readableBytes());
+            message->retrieveAll();
+            loop_->runInLoop([this, d]() {
+                sendInLoop(d);
+            });
         }
     }
 }
 
-void TcpConnection::send(const std::string& data) {
-    if (loop_->isInLoopThread()) {
-        appendResponse(data);
-    } else {
-        loop_->runInLoop([self = shared_from_this(), data]() {
-            self->appendResponse(data);
-        });
-    }
+void TcpConnection::sendInLoop(const std::string& message) {
+    sendInLoop(message.data(), message.size());
 }
 
-void TcpConnection::handleWrite() {
-    if (closed_) {
+void TcpConnection::sendInLoop(const void* data, size_t len) {
+    loop_->assertInLoopThread();
+    ssize_t nwrote = 0;
+    size_t remaining = len;
+    bool faultError = false;
+
+    if (state_ == kDisconnected) {
+        LOG_WARN("disconnected, give up writing");
         return;
     }
 
-    if (!write_buffer_.empty()) {
-        while (!write_buffer_.empty()) {
-            ssize_t n = ::send(fd_, write_buffer_.data(), write_buffer_.size(), MSG_NOSIGNAL);
-            if (n > 0) {
-                write_buffer_.erase(0, static_cast<std::size_t>(n));
-            } else {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    break;
-                } else {
-                    server_->closeConnection(fd_);
-                    return;
+    // if no thing in output queue, try to write directly
+    if (!channel_->isWriting() && outputBuffer_.readableBytes() == 0) {
+        nwrote = ::write(channel_->fd(), data, len);
+        if (nwrote >= 0) {
+            remaining = len - nwrote;
+            if (remaining == 0 && writeCompleteCallback_) {
+                loop_->queueInLoop(std::bind(writeCompleteCallback_, shared_from_this()));
+            }
+        } else {
+            nwrote = 0;
+            if (errno != EWOULDBLOCK) {
+                LOG_ERROR("TcpConnection::sendInLoop");
+                if (errno == EPIPE || errno == ECONNRESET) {
+                    faultError = true;
                 }
             }
         }
     }
 
-    if (write_buffer_.empty() && close_after_write_) {
-        server_->closeConnection(fd_);
-        return;
-    }
-
-    if (channel_) {
-        uint32_t new_events = EPOLLIN | EPOLLET;
-        if (!write_buffer_.empty()) {
-            new_events |= EPOLLOUT;
+    assert(remaining <= len);
+    if (!faultError && remaining > 0) {
+        size_t oldLen = outputBuffer_.readableBytes();
+        if (oldLen + remaining >= highWaterMark_
+            && oldLen < highWaterMark_
+            && highWaterMarkCallback_) {
+            loop_->queueInLoop(std::bind(highWaterMarkCallback_, shared_from_this(), oldLen + remaining));
         }
-        channel_->setEvents(new_events);
-        loop_->updateChannel(channel_.get());
-    }
-}
-
-void TcpConnection::handleClose() {
-    server_->closeConnection(fd_);
-}
-
-void TcpConnection::appendResponse(const std::string& data) {
-    if (closed_) {
-        return;
-    }
-    write_buffer_.append(data);
-    if (channel_) {
-        uint32_t new_events = channel_->events() | EPOLLOUT;
-        channel_->setEvents(new_events);
-        loop_->updateChannel(channel_.get());
+        outputBuffer_.append(static_cast<const char*>(data) + nwrote, remaining);
+        if (!channel_->isWriting()) {
+            channel_->enableWriting();
+        }
     }
 }
 
 void TcpConnection::shutdown() {
-    if (closed_) {
-        return;
+    if (state_ == kConnected) {
+        setState(kDisconnecting);
+        loop_->runInLoop(std::bind(&TcpConnection::shutdownInLoop, this));
     }
-    if (channel_) {
-        loop_->removeChannel(channel_.get());
-        channel_.reset();
-    }
-    if (fd_ >= 0) {
-        ::close(fd_);
-        fd_ = -1;
-    }
-    closed_ = true;
 }
 
+void TcpConnection::shutdownInLoop() {
+    loop_->assertInLoopThread();
+    if (!channel_->isWriting()) {
+        ::shutdown(channel_->fd(), SHUT_WR);
+    }
+}
+
+void TcpConnection::forceClose() {
+    if (state_ == kConnected || state_ == kDisconnecting) {
+        setState(kDisconnecting);
+        loop_->queueInLoop(std::bind(&TcpConnection::forceCloseInLoop, this));
+    }
+}
+
+void TcpConnection::forceCloseInLoop() {
+    loop_->assertInLoopThread();
+    if (state_ == kConnected || state_ == kDisconnecting) {
+        handleClose();
+    }
+}
+
+void TcpConnection::connectEstablished() {
+    loop_->assertInLoopThread();
+    assert(state_ == kConnecting);
+    setState(kConnected);
+    channel_->tie(shared_from_this());
+    channel_->enableET();
+    channel_->enableReading();
+
+    if (connectionCallback_) {
+        connectionCallback_(shared_from_this());
+    }
+}
+
+void TcpConnection::connectDestroyed() {
+    loop_->assertInLoopThread();
+    if (state_ == kConnected) {
+        setState(kDisconnected);
+        channel_->disableAll();
+        if (connectionCallback_) {
+            connectionCallback_(shared_from_this());
+        }
+    }
+    channel_->remove();
+}
+
+void TcpConnection::handleRead() {
+    loop_->assertInLoopThread();
+    int savedErrno = 0;
+    ssize_t n = inputBuffer_.readFd(channel_->fd(), &savedErrno);
+    if (n > 0) {
+        if (messageCallback_) {
+            messageCallback_(shared_from_this(), &inputBuffer_, Timestamp::now());
+        }
+    } else if (n == 0) {
+        handleClose();
+    } else {
+        errno = savedErrno;
+        LOG_ERROR("TcpConnection::handleRead");
+        handleError();
+    }
+}
+
+void TcpConnection::handleWrite() {
+    loop_->assertInLoopThread();
+    if (channel_->isWriting()) {
+        ssize_t n = ::write(channel_->fd(),
+                            outputBuffer_.peek(),
+                            outputBuffer_.readableBytes());
+        if (n > 0) {
+            outputBuffer_.retrieve(n);
+            if (outputBuffer_.readableBytes() == 0) {
+                channel_->disableWriting();
+                if (writeCompleteCallback_) {
+                    loop_->queueInLoop(std::bind(writeCompleteCallback_, shared_from_this()));
+                }
+                if (state_ == kDisconnecting) {
+                    shutdownInLoop();
+                }
+            }
+        } else {
+            LOG_ERROR("TcpConnection::handleWrite");
+        }
+    } else {
+        LOG_WARN("Connection fd={} is down, no more writing", channel_->fd());
+    }
+}
+
+void TcpConnection::handleClose() {
+    loop_->assertInLoopThread();
+    LOG_INFO("fd = {} state = {}", channel_->fd(), (int)state_);
+    assert(state_ == kConnected || state_ == kDisconnecting);
+    setState(kDisconnected);
+    channel_->disableAll();
+
+    TcpConnectionPtr guardThis(shared_from_this());
+    if (connectionCallback_) {
+        connectionCallback_(guardThis);
+    }
+    
+    if (closeCallback_) {
+        closeCallback_(guardThis);
+    }
+}
+
+void TcpConnection::handleError() {
+    int err = 0;
+    socklen_t len = sizeof(err);
+    if (::getsockopt(channel_->fd(), SOL_SOCKET, SO_ERROR, &err, &len) < 0) {
+        err = errno;
+    }
+    LOG_ERROR("TcpConnection::handleError name:{} - SO_ERROR:{}", name_, err);
+}

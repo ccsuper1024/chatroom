@@ -50,7 +50,7 @@ TEST(WebSocketTest, ParseFrameMasked) {
     };
 
     WebSocketFrame frame;
-    int consumed = WebSocketCodec::parseFrame(buffer, frame);
+    int consumed = WebSocketCodec::parseFrame(buffer.data(), buffer.size(), frame);
     
     EXPECT_EQ(consumed, buffer.size());
     EXPECT_TRUE(frame.fin);
@@ -70,8 +70,11 @@ TEST(RtspTest, ParseRequest) {
         "Transport: RTP/AVP;unicast;client_port=4588-4589\r\n"
         "\r\n";
         
+    Buffer buf;
+    buf.append(raw_req);
+
     RtspRequest req;
-    size_t consumed = RtspCodec::parseRequest(raw_req, req);
+    size_t consumed = RtspCodec::parseRequest(&buf, req);
     
     EXPECT_GT(consumed, 0);
     EXPECT_EQ(req.method, RtspMethod::SETUP);

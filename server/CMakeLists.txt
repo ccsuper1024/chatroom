@@ -30,6 +30,10 @@ target_link_libraries(chatroom_server
 add_executable(chatroom_test
     tests/chatroom_test.cpp
     tests/protocol_test.cpp
+    tests/inet_address_test.cpp
+    tests/buffer_test.cpp
+    tests/event_loop_test.cpp
+    tests/timer_test.cpp
 )
 target_link_libraries(chatroom_test
     PRIVATE chatroom_server_lib

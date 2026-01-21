@@ -1,0 +1,25 @@
+var searchData=
+[
+  ['rate_5flimiter_5f_0',['rate_limiter_',['../classChatRoomServer.html#a0cd945c1d02eba59474582e5651b823a',1,'ChatRoomServer']]],
+  ['rc_1',['rc',['../structprotocols_1_1RtcpHeader.html#ad362d6133e7719f0c00ebf9e166d1b15',1,'protocols::RtcpHeader']]],
+  ['read_5fbuffer_5f_2',['read_buffer_',['../classTcpConnection.html#a78cd5d0c9b0cf9d2f0f181c2e0651f6f',1,'TcpConnection']]],
+  ['readcallback_5f_3',['readCallback_',['../classChannel.html#a5c322e611419913184508a36073e1a79',1,'Channel']]],
+  ['registerhandler_4',['registerHandler',['../classHttpServer.html#a1d1e05e318ac5bb209295ca9e4631df4',1,'HttpServer']]],
+  ['remote_5fip_5',['remote_ip',['../structHttpRequest.html#a83aeca0077ef138e7868baf59a7689a6',1,'HttpRequest']]],
+  ['remove_6',['remove',['../classChannel.html#afc437cc4a61112b217ab153ff1912468',1,'Channel']]],
+  ['removechannel_7',['removeChannel',['../classEventLoop.html#aa543e036c509b5b2b376bac134f777ab',1,'EventLoop']]],
+  ['rtcpheader_8',['RtcpHeader',['../structprotocols_1_1RtcpHeader.html',1,'protocols']]],
+  ['rtp_5frtcp_2eh_9',['rtp_rtcp.h',['../rtp__rtcp_8h.html',1,'']]],
+  ['rtpheader_10',['RtpHeader',['../structprotocols_1_1RtpHeader.html',1,'protocols']]],
+  ['rtppacket_11',['RtpPacket',['../classprotocols_1_1RtpPacket.html',1,'protocols']]],
+  ['rtsp_12',['RTSP',['../classTcpConnection.html#acf86b6aa4f12f25cda2b0ff5bbcb1a4da9f00094456f649db4d6e16a8e4823e8f',1,'TcpConnection']]],
+  ['rtsp_5fcodec_2eh_13',['rtsp_codec.h',['../rtsp__codec_8h.html',1,'']]],
+  ['rtsp_5fhandler_5f_14',['rtsp_handler_',['../classHttpServer.html#a4cd71b20defd8f33305444b49bb15fa3',1,'HttpServer']]],
+  ['rtspcodec_15',['RtspCodec',['../classprotocols_1_1RtspCodec.html',1,'protocols']]],
+  ['rtsphandler_16',['RtspHandler',['../http__server_8h.html#a03274c3a062d2e3d8e06264569056523',1,'http_server.h']]],
+  ['rtspmethod_17',['RtspMethod',['../namespaceprotocols.html#a0fae3121ba31b2adbd9c96c98cf09604',1,'protocols']]],
+  ['rtsprequest_18',['RtspRequest',['../structprotocols_1_1RtspRequest.html',1,'protocols']]],
+  ['rtspresponse_19',['RtspResponse',['../structprotocols_1_1RtspResponse.html',1,'protocols']]],
+  ['runinloop_20',['runInLoop',['../classEventLoop.html#acabf8476c2eace590038a1b698fb233c',1,'EventLoop']]],
+  ['running_5f_21',['running_',['../classChatRoomServer.html#a088bef553886ad6915b8bb68402cb2f9',1,'ChatRoomServer::running_'],['../classSessionManager.html#afcfd4e3cce77d2e64c5cbeb370b7f18d',1,'SessionManager::running_'],['../classHttpServer.html#a636c500962f020777d349ab5c07a78ec',1,'HttpServer::running_'],['../classEventLoop.html#a4b0d928faa0716ec0fb0ddd064802b14',1,'EventLoop::running_']]]
+];

@@ -5,69 +5,120 @@
 #include <memory>
 #include <string>
 
+#include "net/tcp_server.h"
 #include "net/event_loop.h"
-#include "net/event_loop_thread_pool.h"
 #include "http/http_codec.h"
 #include "utils/thread_pool.h"
 #include "websocket/websocket_codec.h"
 #include "rtsp/rtsp_codec.h"
 
-class Acceptor;
 class TcpConnection;
 
-// 定义请求处理函数类型
+/**
+ * @brief HTTP请求处理函数类型
+ */
 using HttpHandler = std::function<HttpResponse(const HttpRequest&)>;
-using WebSocketHandler = std::function<void(std::shared_ptr<TcpConnection>, const protocols::WebSocketFrame&)>;
-using RtspHandler = std::function<void(std::shared_ptr<TcpConnection>, const protocols::RtspRequest&)>;
 
+/**
+ * @brief WebSocket消息处理函数类型
+ */
+using WebSocketHandler = std::function<void(const TcpConnectionPtr&, const protocols::WebSocketFrame&)>;
+
+/**
+ * @brief RTSP请求处理函数类型
+ */
+using RtspHandler = std::function<void(const TcpConnectionPtr&, const protocols::RtspRequest&)>;
+
+/**
+ * @brief HTTP服务器核心类
+ * 
+ * 负责监听端口、接受连接、分发请求到对应的处理器。
+ * 支持HTTP、WebSocket和RTSP协议的混合处理。
+ */
 class HttpServer {
 public:
-    explicit HttpServer(int port);
+    /**
+     * @brief 构造函数
+     * @param port 服务器监听端口
+     */
+    explicit HttpServer(EventLoop* loop, int port);
+    
+    /**
+     * @brief 析构函数
+     * 
+     * 停止服务器并释放资源。
+     */
     ~HttpServer();
 
-    // 注册路由处理器
+    /**
+     * @brief 注册HTTP路由处理器
+     * @param path 请求路径 (例如 "/api/login")
+     * @param handler 处理函数
+     */
     void registerHandler(const std::string& path, HttpHandler handler);
 
-    // 设置 WebSocket 处理器
+    /**
+     * @brief 设置WebSocket消息处理器
+     * @param handler 处理函数
+     */
     void setWebSocketHandler(WebSocketHandler handler);
     
-    // Set RTSP Handler
+    /**
+     * @brief 设置RTSP请求处理器
+     * @param handler 处理函数
+     */
     void setRtspHandler(RtspHandler handler);
 
-    // 启动服务器（阻塞）
+    /**
+     * @brief 启动服务器
+     * 
+     * 初始化Acceptor并进入事件循环（阻塞）。
+     */
     void start();
     
-    // 停止服务器
+    /**
+     * @brief 停止服务器
+     * 
+     * 退出事件循环并关闭所有连接。
+     */
     void stop();
+    
+    EventLoop* getLoop() const { return server_.getLoop(); }
 
     // 线程池指标
+    /**
+     * @brief 获取业务线程池任务队列大小
+     * @return 队列中等待的任务数量
+     */
     std::size_t getThreadPoolQueueSize() const;
+    
+    /**
+     * @brief 获取业务线程池拒绝任务数
+     * @return 被拒绝的任务总数
+     */
     std::size_t getThreadPoolRejectedCount() const;
+
+    /**
+     * @brief 获取业务线程池线程总数
+     * @return 线程池大小
+     */
     std::size_t getThreadPoolThreadCount() const;
+    
+    /**
+     * @brief 获取业务线程池活跃线程数
+     * @return 正在执行任务的线程数量
+     */
     std::size_t getThreadPoolActiveThreadCount() const;
 
 private:
-    friend class TcpConnection;
+    void onConnection(const TcpConnectionPtr& conn);
+    void onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp receiveTime);
+    void onRequest(const TcpConnectionPtr& conn, const HttpRequest& req);
 
-    int port_;
-    bool running_;
-    std::unique_ptr<ThreadPool> thread_pool_;
-    std::unique_ptr<EventLoopThreadPool> io_thread_pool_;
-    
-    std::map<int, std::shared_ptr<TcpConnection>> connections_;
-    
-    void handleHttpRequest(std::shared_ptr<TcpConnection> conn, const HttpRequest& request);
-    void handleWebSocketMessage(std::shared_ptr<TcpConnection> conn, const protocols::WebSocketFrame& frame);
-    void handleRtspMessage(std::shared_ptr<TcpConnection> conn, const protocols::RtspRequest& request);
-
-    void newConnection(int fd, const std::string& ip);
-    void closeConnection(int fd);
-    
-    // 路由表
+    TcpServer server_;
     std::map<std::string, HttpHandler> handlers_;
     WebSocketHandler ws_handler_;
     RtspHandler rtsp_handler_;
-
-    EventLoop loop_;
-    std::unique_ptr<Acceptor> acceptor_;
+    ThreadPool thread_pool_;
 };
+

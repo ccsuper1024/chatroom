@@ -1,48 +1,84 @@
 #include "net/event_loop.h"
 #include "net/channel.h"
+#include "net/poller.h"
+#include "net/timer_queue.h"
+#include "logger.h"
 
-#include <unistd.h>
 #include <sys/eventfd.h>
-#include <iostream>
+#include <unistd.h>
+#include <algorithm>
+
+namespace {
+    __thread EventLoop* t_loopInThisThread = nullptr;
+
+    int createEventfd() {
+        int evtfd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (evtfd < 0) {
+            LOG_FATAL("Failed in eventfd");
+        }
+        return evtfd;
+    }
+}
+
+EventLoop* EventLoop::getEventLoopOfCurrentThread() {
+    return t_loopInThisThread;
+}
 
 EventLoop::EventLoop()
-    : epoll_fd_(::epoll_create1(0)),
-      wakeup_fd_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)),
-      running_(false),
-      events_(64),
-      thread_id_(std::this_thread::get_id()),
-      calling_pending_functors_(false) {
-    if (wakeup_fd_ < 0) {
-        std::cerr << "Failed to create eventfd" << std::endl;
-        abort();
+    : looping_(false),
+      quit_(false),
+      eventHandling_(false),
+      callingPendingFunctors_(false),
+      threadId_(std::this_thread::get_id()),
+      poller_(Poller::newDefaultPoller(this)),
+      wakeupFd_(createEventfd()),
+      wakeupChannel_(new Channel(this, wakeupFd_)),
+      timerQueue_(new net::TimerQueue(this)) {
+    
+    if (t_loopInThisThread) {
+        LOG_FATAL("Another EventLoop exists in this thread");
+    } else {
+        t_loopInThisThread = this;
     }
-    wakeup_channel_ = std::make_unique<Channel>(this, wakeup_fd_);
-    wakeup_channel_->setReadCallback([this]() { handleWakeup(); });
-    wakeup_channel_->enableReading();
+
+    wakeupChannel_->setReadCallback(std::bind(&EventLoop::handleRead, this));
+    wakeupChannel_->enableReading();
 }
 
 EventLoop::~EventLoop() {
-    wakeup_channel_->disableAll();
-    wakeup_channel_->remove();
-    ::close(wakeup_fd_);
-    if (epoll_fd_ >= 0) {
-        ::close(epoll_fd_);
-    }
+    wakeupChannel_->disableAll();
+    wakeupChannel_->remove();
+    ::close(wakeupFd_);
+    t_loopInThisThread = nullptr;
 }
 
-void EventLoop::wakeup() {
-    uint64_t one = 1;
-    ssize_t n = ::write(wakeup_fd_, &one, sizeof(one));
-    if (n != sizeof(one)) {
-        std::cerr << "EventLoop::wakeup() writes " << n << " bytes instead of 8" << std::endl;
+void EventLoop::loop() {
+    if (looping_) return;
+    looping_ = true;
+    quit_ = false;
+
+    LOG_INFO("EventLoop {} start looping", (void*)this);
+
+    while (!quit_) {
+        activeChannels_.clear();
+        poller_->poll(10000, &activeChannels_);
+        
+        eventHandling_ = true;
+        for (Channel* channel : activeChannels_) {
+            channel->handleEvent();
+        }
+        eventHandling_ = false;
+
+        doPendingFunctors();
     }
+    LOG_INFO("EventLoop {} stop looping", (void*)this);
+    looping_ = false;
 }
 
-void EventLoop::handleWakeup() {
-    uint64_t one = 1;
-    ssize_t n = ::read(wakeup_fd_, &one, sizeof(one));
-    if (n != sizeof(one)) {
-        std::cerr << "EventLoop::handleWakeup() reads " << n << " bytes instead of 8" << std::endl;
+void EventLoop::stop() {
+    quit_ = true;
+    if (!isInLoopThread()) {
+        wakeup();
     }
 }
 
@@ -57,71 +93,66 @@ void EventLoop::runInLoop(Functor cb) {
 void EventLoop::queueInLoop(Functor cb) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        pending_functors_.push_back(std::move(cb));
+        pendingFunctors_.emplace_back(std::move(cb));
     }
-    // Wake up if not in loop thread OR if we are currently calling pending functors
-    // (so that after finishing the current batch, we don't block in epoll_wait but process the new one)
-    if (!isInLoopThread() || calling_pending_functors_) {
+    if (!isInLoopThread() || callingPendingFunctors_) {
         wakeup();
+    }
+}
+
+void EventLoop::updateChannel(Channel* channel) {
+    poller_->updateChannel(channel);
+}
+
+void EventLoop::removeChannel(Channel* channel) {
+    poller_->removeChannel(channel);
+}
+
+bool EventLoop::hasChannel(Channel* channel) {
+    return poller_->hasChannel(channel);
+}
+
+void EventLoop::wakeup() {
+    uint64_t one = 1;
+    ssize_t n = ::write(wakeupFd_, &one, sizeof(one));
+    if (n != sizeof(one)) {
+        LOG_ERROR("EventLoop::wakeup() writes {} bytes instead of 8", n);
+    }
+}
+
+void EventLoop::handleRead() {
+    uint64_t one = 1;
+    ssize_t n = ::read(wakeupFd_, &one, sizeof(one));
+    if (n != sizeof(one)) {
+        LOG_ERROR("EventLoop::handleRead() reads {} bytes instead of 8", n);
     }
 }
 
 void EventLoop::doPendingFunctors() {
     std::vector<Functor> functors;
-    calling_pending_functors_ = true;
+    callingPendingFunctors_ = true;
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        functors.swap(pending_functors_);
+        functors.swap(pendingFunctors_);
     }
 
     for (const auto& functor : functors) {
         functor();
     }
-    calling_pending_functors_ = false;
+    callingPendingFunctors_ = false;
 }
 
-void EventLoop::loop() {
-    running_ = true;
-    while (running_) {
-        int n = ::epoll_wait(epoll_fd_, events_.data(),
-                             static_cast<int>(events_.size()), 1000);
-        
-        if (n > 0) {
-            if (static_cast<size_t>(n) == events_.size()) {
-                events_.resize(events_.size() * 2);
-            }
-            
-            for (int i = 0; i < n; ++i) {
-                auto* ch = static_cast<Channel*>(events_[i].data.ptr);
-                if (ch) {
-                    ch->handleEvent(events_[i].events);
-                }
-            }
-        }
-        
-        doPendingFunctors();
-    }
+void EventLoop::runAt(Timestamp time, TimerCallback cb) {
+    timerQueue_->addTimer(std::move(cb), time, 0.0);
 }
 
-void EventLoop::stop() {
-    running_ = false;
+void EventLoop::runAfter(double delay, TimerCallback cb) {
+    Timestamp time = net::addTime(Timestamp::now(), delay);
+    runAt(time, std::move(cb));
 }
 
-void EventLoop::addChannel(Channel* channel) {
-    epoll_event ev;
-    ev.events = channel->events();
-    ev.data.ptr = channel;
-    ::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, channel->fd(), &ev);
-}
-
-void EventLoop::updateChannel(Channel* channel) {
-    epoll_event ev;
-    ev.events = channel->events();
-    ev.data.ptr = channel;
-    ::epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, channel->fd(), &ev);
-}
-
-void EventLoop::removeChannel(Channel* channel) {
-    ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, channel->fd(), nullptr);
+void EventLoop::runEvery(double interval, TimerCallback cb) {
+    Timestamp time = net::addTime(Timestamp::now(), interval);
+    timerQueue_->addTimer(std::move(cb), time, interval);
 }

@@ -65,7 +65,7 @@ ChatRoomServer::ChatRoomServer(int port)
     : metrics_collector_(std::make_shared<MetricsCollector>()),
       session_manager_(std::make_unique<SessionManager>(metrics_collector_)),
       running_(false) {
-    http_server_ = std::make_unique<HttpServer>(port);
+    http_server_ = std::make_unique<HttpServer>(&loop_, port);
     
     http_server_->setWebSocketHandler([this](std::shared_ptr<TcpConnection> conn, const protocols::WebSocketFrame& frame) {
         handleWebSocketMessage(conn, frame);
@@ -127,8 +127,18 @@ void ChatRoomServer::start() {
     running_.store(true);
     session_manager_->start();
     http_server_->start();
+    
+    loop_.loop();
+    
     running_.store(false);
     session_manager_->stop();
+}
+
+void ChatRoomServer::stop() {
+    loop_.stop();
+    if (http_server_) {
+        http_server_->stop();
+    }
 }
 
 HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
@@ -435,7 +445,7 @@ void ChatRoomServer::handleWebSocketMessage(std::shared_ptr<TcpConnection> conn,
                 if (validateUsername(username)) {
                     {
                         std::lock_guard<std::mutex> lock(ws_mutex_);
-                        ws_connections_[conn->fd()] = username;
+                        ws_connections_[conn->name()] = username;
                     }
                     
                     json resp;
@@ -456,7 +466,7 @@ void ChatRoomServer::handleWebSocketMessage(std::shared_ptr<TcpConnection> conn,
                 std::string username;
                 {
                     std::lock_guard<std::mutex> lock(ws_mutex_);
-                    auto it = ws_connections_.find(conn->fd());
+                    auto it = ws_connections_.find(conn->name());
                     if (it != ws_connections_.end()) {
                         username = it->second;
                     }
@@ -490,7 +500,7 @@ void ChatRoomServer::handleWebSocketMessage(std::shared_ptr<TcpConnection> conn,
         }
     } else if (frame.opcode == protocols::WebSocketOpcode::CLOSE) {
         std::lock_guard<std::mutex> lock(ws_mutex_);
-        ws_connections_.erase(conn->fd());
+        ws_connections_.erase(conn->name());
     }
 }
 
@@ -523,10 +533,4 @@ void ChatRoomServer::handleRtspMessage(std::shared_ptr<TcpConnection> conn, cons
     
     std::string resp_str = protocols::RtspCodec::buildResponse(response);
     conn->send(resp_str);
-}
-
-void ChatRoomServer::stop() {
-    LOG_INFO("聊天室服务器停止");
-    running_ = false;
-    http_server_->stop();
 }

@@ -1,9 +1,12 @@
 #include "net/event_loop_thread.h"
 #include "net/event_loop.h"
 
-EventLoopThread::EventLoopThread()
+EventLoopThread::EventLoopThread(const ThreadInitCallback& cb,
+                               const std::string& name)
     : loop_(nullptr),
-      exiting_(false) {
+      exiting_(false),
+      callback_(cb),
+      name_(name) {
 }
 
 EventLoopThread::~EventLoopThread() {
@@ -29,6 +32,11 @@ EventLoop* EventLoopThread::startLoop() {
 
 void EventLoopThread::threadFunc() {
     EventLoop loop;
+    
+    if (callback_) {
+        callback_(&loop);
+    }
+
     {
         std::unique_lock<std::mutex> lock(mutex_);
         loop_ = &loop;

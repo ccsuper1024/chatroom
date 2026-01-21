@@ -1,71 +1,111 @@
 #include "http/http_codec.h"
+#include "net/buffer.h"
 
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <algorithm>
+#include <iostream>
 
-HttpRequest parseRequestFromBuffer(std::string& buffer, bool& complete, bool& bad_request) {
+HttpRequest parseRequestFromBuffer(Buffer* buf, bool& complete, bool& bad_request) {
     complete = false;
     bad_request = false;
     HttpRequest request;
-    std::size_t header_end = buffer.find("\r\n\r\n");
-    if (header_end == std::string::npos) {
-        return request;
-    }
-    std::string header = buffer.substr(0, header_end + 4);
 
-    std::istringstream stream(header);
-    std::string line;
-    if (!std::getline(stream, line)) {
+    const char* begin = buf->peek();
+    const char* end = buf->beginWrite();
+    
+    // Find double CRLF (\r\n\r\n) indicating end of headers
+    const char crlf2[] = "\r\n\r\n";
+    const char* headersEnd = std::search(begin, end, crlf2, crlf2 + 4);
+    
+    if (headersEnd == end) {
+        return request; // Incomplete
+    }
+    
+    // Parse headers
+    // Using string_view for efficient parsing without copy
+    std::string_view headerPart(begin, headersEnd - begin);
+    
+    size_t lineStart = 0;
+    size_t lineEnd = headerPart.find("\r\n");
+    
+    // Request Line
+    if (lineEnd == std::string_view::npos) {
         bad_request = true;
         return request;
     }
-    if (!line.empty() && line.back() == '\r') {
-        line.pop_back();
+    
+    std::string_view requestLine = headerPart.substr(0, lineEnd);
+    
+    // Method
+    size_t methodEnd = requestLine.find(' ');
+    if (methodEnd == std::string_view::npos) {
+        bad_request = true;
+        return request;
     }
-    {
-        std::istringstream line_stream(line);
-        line_stream >> request.method >> request.path;
-        if (request.method.empty() || request.path.empty()) {
-            bad_request = true;
-            return request;
-        }
+    request.method = std::string(requestLine.substr(0, methodEnd));
+    
+    // Path
+    size_t pathStart = methodEnd + 1;
+    while (pathStart < requestLine.size() && requestLine[pathStart] == ' ') pathStart++;
+    size_t pathEnd = requestLine.find(' ', pathStart);
+    if (pathEnd == std::string_view::npos) {
+        // HTTP/0.9 or missing version, take the rest as path
+        request.path = std::string(requestLine.substr(pathStart));
+    } else {
+        request.path = std::string(requestLine.substr(pathStart, pathEnd - pathStart));
     }
-
-    std::size_t content_length = 0;
-    while (std::getline(stream, line) && line != "\r") {
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
+    
+    // Headers
+    lineStart = lineEnd + 2;
+    size_t contentLength = 0;
+    
+    while (lineStart < headerPart.size()) {
+        lineEnd = headerPart.find("\r\n", lineStart);
+        if (lineEnd == std::string_view::npos) lineEnd = headerPart.size();
         
-        auto colon = line.find(':');
-        if (colon != std::string::npos) {
-            std::string key = line.substr(0, colon);
-            std::string val = line.substr(colon + 1);
-            while (!val.empty() && val[0] == ' ') val.erase(0, 1);
+        std::string_view line = headerPart.substr(lineStart, lineEnd - lineStart);
+        
+        size_t colon = line.find(':');
+        if (colon != std::string_view::npos) {
+            std::string key(line.substr(0, colon));
+            std::string_view valView = line.substr(colon + 1);
+            // trim spaces
+            while (!valView.empty() && valView.front() == ' ') valView.remove_prefix(1);
+            while (!valView.empty() && valView.back() == ' ') valView.remove_suffix(1);
             
+            std::string val(valView);
             request.headers[key] = val;
             
             if (key == "Content-Type") {
                 request.content_type = val;
             } else if (key == "Content-Length") {
                 try {
-                    content_length = std::stoull(val);
+                    contentLength = std::stoull(val);
                 } catch (...) {
                     bad_request = true;
                     return request;
                 }
             }
         }
+        
+        lineStart = lineEnd + 2;
     }
-
-    std::size_t total_needed = header_end + 4 + content_length;
-    if (buffer.size() < total_needed) {
+    
+    // Check body
+    size_t headerLen = (headersEnd - begin) + 4;
+    size_t totalLen = headerLen + contentLength;
+    
+    if (buf->readableBytes() < totalLen) {
         return request;
     }
-    if (content_length > 0) {
-        request.body = buffer.substr(header_end + 4, content_length);
+    
+    if (contentLength > 0) {
+        request.body = std::string(headersEnd + 4, contentLength);
     }
-    buffer.erase(0, total_needed);
+    
+    buf->retrieve(totalLen);
     complete = true;
     return request;
 }
@@ -84,4 +124,3 @@ std::string buildResponse(const HttpResponse& response) {
     oss << response.body;
     return oss.str();
 }
-

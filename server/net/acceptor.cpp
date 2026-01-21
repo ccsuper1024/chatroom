@@ -1,119 +1,84 @@
 #include "net/acceptor.h"
 #include "net/event_loop.h"
-#include "net/channel.h"
+#include "net/inet_address.h"
 #include "logger.h"
 
 #include <sys/socket.h>
-#include <netinet/in.h>
-#include <sys/epoll.h>
-#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <fcntl.h>
+#include <unistd.h>
 #include <errno.h>
+#include <assert.h>
 
-#include <arpa/inet.h>
+// Helper functions for socket operations
+static int createNonblockingOrDie(sa_family_t family) {
+    int sockfd = ::socket(family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_TCP);
+    if (sockfd < 0) {
+        LOG_FATAL("Acceptor::createNonblockingOrDie");
+    }
+    return sockfd;
+}
 
-Acceptor::Acceptor(EventLoop* loop, int port)
+Acceptor::Acceptor(EventLoop* loop, const InetAddress& listenAddr, bool reuseport)
     : loop_(loop),
-      listen_fd_(-1),
-      port_(port),
-      channel_(nullptr) {
-    listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (listen_fd_ < 0) {
-        LOG_ERROR("创建监听套接字失败");
-        return;
-    }
-
+      acceptSocketFd_(createNonblockingOrDie(listenAddr.family())),
+      acceptChannel_(loop, acceptSocketFd_),
+      listening_(false),
+      idleFd_(::open("/dev/null", O_RDONLY | O_CLOEXEC)) {
+    
+    assert(idleFd_ >= 0);
+    
     int opt = 1;
-    if (::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        LOG_ERROR("设置监听套接字选项失败");
-        ::close(listen_fd_);
-        listen_fd_ = -1;
-        return;
+    ::setsockopt(acceptSocketFd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    if (reuseport) {
+        ::setsockopt(acceptSocketFd_, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
     }
-
-    sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(port_);
-
-    if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        LOG_ERROR("绑定端口 {} 失败", port_);
-        ::close(listen_fd_);
-        listen_fd_ = -1;
-        return;
+    
+    if (::bind(acceptSocketFd_, (const struct sockaddr*)listenAddr.getSockAddr(), sizeof(struct sockaddr_in)) < 0) {
+        LOG_FATAL("Acceptor::bind");
     }
-
-    if (::listen(listen_fd_, 10) < 0) {
-        LOG_ERROR("监听失败");
-        ::close(listen_fd_);
-        listen_fd_ = -1;
-        return;
-    }
-
-    int flags = ::fcntl(listen_fd_, F_GETFL, 0);
-    if (flags < 0) {
-        LOG_ERROR("获取监听套接字标志失败");
-        ::close(listen_fd_);
-        listen_fd_ = -1;
-        return;
-    }
-    if (::fcntl(listen_fd_, F_SETFL, flags | O_NONBLOCK) < 0) {
-        LOG_ERROR("设置监听套接字非阻塞失败");
-        ::close(listen_fd_);
-        listen_fd_ = -1;
-        return;
-    }
-
-    channel_ = new Channel(loop_, listen_fd_);
-    channel_->setEvents(EPOLLIN);
-    channel_->setReadCallback([this]() {
-        handleRead();
-    });
-    loop_->addChannel(channel_);
+    
+    acceptChannel_.setReadCallback(std::bind(&Acceptor::handleRead, this));
 }
 
 Acceptor::~Acceptor() {
-    if (channel_) {
-        loop_->removeChannel(channel_);
-        delete channel_;
-        channel_ = nullptr;
-    }
-    if (listen_fd_ >= 0) {
-        ::close(listen_fd_);
-        listen_fd_ = -1;
-    }
+    acceptChannel_.disableAll();
+    acceptChannel_.remove();
+    ::close(acceptSocketFd_);
+    ::close(idleFd_);
 }
 
-void Acceptor::setNewConnectionCallback(NewConnectionCallback cb) {
-    callback_ = std::move(cb);
-}
-
-bool Acceptor::isValid() const {
-    return listen_fd_ >= 0;
+void Acceptor::listen() {
+    loop_->assertInLoopThread();
+    listening_ = true;
+    if (::listen(acceptSocketFd_, SOMAXCONN) < 0) {
+        LOG_FATAL("Acceptor::listen");
+    }
+    acceptChannel_.enableReading();
 }
 
 void Acceptor::handleRead() {
-    while (true) {
-        sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
-        int client_fd = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
-        if (client_fd < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break;
-            }
-            LOG_ERROR("接受连接失败");
-            break;
-        }
-        // 设置非阻塞
-        int flags = ::fcntl(client_fd, F_GETFL, 0);
-        ::fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
-
-        if (callback_) {
-            char ip[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &(client_addr.sin_addr), ip, INET_ADDRSTRLEN);
-            callback_(client_fd, std::string(ip));
+    loop_->assertInLoopThread();
+    struct sockaddr_in peerAddr;
+    socklen_t peerAddrLen = sizeof(peerAddr);
+    // accept4 is Linux specific, but we are on Linux
+    int connfd = ::accept4(acceptSocketFd_, (struct sockaddr*)&peerAddr, &peerAddrLen, SOCK_NONBLOCK | SOCK_CLOEXEC);
+    
+    if (connfd >= 0) {
+        if (newConnectionCallback_) {
+            InetAddress inetPeerAddr(peerAddr);
+            newConnectionCallback_(connfd, inetPeerAddr);
         } else {
-            ::close(client_fd);
+            ::close(connfd);
+        }
+    } else {
+        LOG_ERROR("Acceptor::handleRead");
+        if (errno == EMFILE) {
+            ::close(idleFd_);
+            idleFd_ = ::accept(acceptSocketFd_, NULL, NULL);
+            ::close(idleFd_);
+            idleFd_ = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
         }
     }
 }

@@ -2,27 +2,33 @@
 
 #include <functional>
 #include <string>
+#include "net/channel.h"
+#include "net/inet_address.h"
 
 class EventLoop;
-class Channel;
 
 class Acceptor {
 public:
-    using NewConnectionCallback = std::function<void(int, const std::string&)>;
+    using NewConnectionCallback = std::function<void(int sockfd, const InetAddress&)>;
 
-    Acceptor(EventLoop* loop, int port);
+    Acceptor(EventLoop* loop, const InetAddress& listenAddr, bool reuseport);
     ~Acceptor();
 
-    void setNewConnectionCallback(NewConnectionCallback cb);
+    void setNewConnectionCallback(const NewConnectionCallback& cb) {
+        newConnectionCallback_ = cb;
+    }
 
-    bool isValid() const;
+    void listen();
+    bool listening() const { return listening_; }
 
 private:
     void handleRead();
 
     EventLoop* loop_;
-    int listen_fd_;
-    int port_;
-    Channel* channel_;
-    NewConnectionCallback callback_;
+    int acceptSocketFd_; // Replaces listen_fd_
+    Channel acceptChannel_;
+    NewConnectionCallback newConnectionCallback_;
+    bool listening_;
+    int idleFd_; // For EMFILE handling
 };
+

@@ -5,6 +5,7 @@
 #include "database_manager.h"
 #include "net/tcp_connection.h"
 #include "net/event_loop.h"
+#include "net/inet_address.h"
 #include "websocket/websocket_codec.h"
 #include "rtsp/rtsp_codec.h"
 #include <nlohmann/json.hpp>
@@ -75,11 +76,15 @@ protected:
         server_->handleWebSocketMessage(conn, frame);
     }
 
+    void HandleRtspMessage(std::shared_ptr<TcpConnection> conn, const protocols::RtspRequest& request) {
+        server_->handleRtspMessage(conn, request);
+    }
+
     std::unique_ptr<ChatRoomServer> server_;
 };
 
 TEST_F(ChatRoomServerTest, WebSocketLoginAndMessage) {
-    EventLoop loop;
+    EventLoop* loop = server_->getLoop();
     int fds[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
     
@@ -87,7 +92,10 @@ TEST_F(ChatRoomServerTest, WebSocketLoginAndMessage) {
     fcntl(fds[0], F_SETFL, O_NONBLOCK);
     fcntl(fds[1], F_SETFL, O_NONBLOCK);
 
-    auto conn = std::make_shared<TcpConnection>(GetHttpServer(), &loop, fds[0], "127.0.0.1");
+    InetAddress localAddr(0);
+    InetAddress peerAddr(0);
+    auto conn = std::make_shared<TcpConnection>(loop, "test-ws-conn", fds[0], localAddr, peerAddr);
+    conn->connectEstablished();
     
     // 1. Login
     json login_req;
@@ -97,14 +105,13 @@ TEST_F(ChatRoomServerTest, WebSocketLoginAndMessage) {
     
     protocols::WebSocketFrame frame;
     frame.opcode = protocols::WebSocketOpcode::TEXT;
-    frame.payload.assign(login_str.begin(), login_str.end());
+    frame.payload = login_str;
     
     HandleWebSocketMessage(conn, frame);
-    conn->handleWrite(); // Flush buffer
     
     // Read response from fds[1]
     char buf[1024];
-    int n = read(fds[1], buf, sizeof(buf));
+    ssize_t n = read(fds[1], buf, sizeof(buf));
     ASSERT_GT(n, 0);
     
     std::vector<uint8_t> recv_buf(buf, buf + n);
@@ -123,9 +130,8 @@ TEST_F(ChatRoomServerTest, WebSocketLoginAndMessage) {
     msg_req["content"] = "hello ws";
     std::string msg_str = msg_req.dump();
     
-    frame.payload.assign(msg_str.begin(), msg_str.end());
+    frame.payload = msg_str;
     HandleWebSocketMessage(conn, frame);
-    conn->handleWrite(); // Flush buffer
     
     // Read response
     n = read(fds[1], buf, sizeof(buf));
@@ -277,13 +283,16 @@ TEST_F(ChatRoomServerTest, PrivateMessageTest) {
 }
 
 TEST_F(ChatRoomServerTest, RtspOptionsAndDescribe) {
-    EventLoop loop;
+    EventLoop* loop = server_->getLoop();
     int fds[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
     fcntl(fds[0], F_SETFL, O_NONBLOCK);
     fcntl(fds[1], F_SETFL, O_NONBLOCK);
 
-    auto conn = std::make_shared<TcpConnection>(GetHttpServer(), &loop, fds[0], "127.0.0.1");
+    InetAddress localAddr(0);
+    InetAddress peerAddr(0);
+    auto conn = std::make_shared<TcpConnection>(loop, "test-rtsp-conn", fds[0], localAddr, peerAddr);
+    conn->connectEstablished();
 
     // 1. Send OPTIONS
     std::string options_req = 
@@ -292,15 +301,16 @@ TEST_F(ChatRoomServerTest, RtspOptionsAndDescribe) {
         "User-Agent: ChatRoomClient\r\n"
         "\r\n";
     
-    write(fds[1], options_req.data(), options_req.size());
-    
-    // Trigger read
-    conn->handleRead();
-    conn->handleWrite(); // Flush output
+    protocols::RtspRequest options_request;
+    Buffer optionsBuf;
+    optionsBuf.append(options_req);
+    size_t consumed = protocols::RtspCodec::parseRequest(&optionsBuf, options_request);
+    ASSERT_GT(consumed, 0);
+    HandleRtspMessage(conn, options_request);
     
     // Read response
     char buf[4096];
-    int n = read(fds[1], buf, sizeof(buf));
+    ssize_t n = read(fds[1], buf, sizeof(buf));
     ASSERT_GT(n, 0);
     
     std::string resp_str(buf, n);
@@ -318,9 +328,12 @@ TEST_F(ChatRoomServerTest, RtspOptionsAndDescribe) {
         "Accept: application/sdp\r\n"
         "\r\n";
         
-    write(fds[1], describe_req.data(), describe_req.size());
-    conn->handleRead();
-    conn->handleWrite();
+    protocols::RtspRequest describe_request;
+    Buffer describeBuf;
+    describeBuf.append(describe_req);
+    consumed = protocols::RtspCodec::parseRequest(&describeBuf, describe_request);
+    ASSERT_GT(consumed, 0);
+    HandleRtspMessage(conn, describe_request);
     
     n = read(fds[1], buf, sizeof(buf));
     ASSERT_GT(n, 0);

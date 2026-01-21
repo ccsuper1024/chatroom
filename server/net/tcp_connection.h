@@ -3,54 +3,90 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include "websocket/websocket_codec.h"
+#include <any>
+#include <atomic>
+#include "net/callbacks.h"
+#include "net/buffer.h"
+#include "net/inet_address.h"
 
-class HttpServer;
 class EventLoop;
 class Channel;
+class Socket;
 
 class TcpConnection : public std::enable_shared_from_this<TcpConnection> {
 public:
-    enum class Protocol {
-        HTTP,
-        WEBSOCKET,
-        RTSP
-    };
-
-    TcpConnection(HttpServer* server, EventLoop* loop, int fd, const std::string& ip);
+    TcpConnection(EventLoop* loop,
+                  const std::string& name,
+                  int sockfd,
+                  const InetAddress& localAddr,
+                  const InetAddress& peerAddr);
     ~TcpConnection();
 
-    int fd() const;
-    std::string ip() const { return ip_; }
-    bool closed() const;
+    EventLoop* getLoop() const { return loop_; }
+    const std::string& name() const { return name_; }
+    const InetAddress& localAddress() const { return localAddr_; }
+    const InetAddress& peerAddress() const { return peerAddr_; }
+    bool connected() const { return state_ == kConnected; }
+    bool disconnected() const { return state_ == kDisconnected; }
 
+    // Send data (thread-safe)
+    void send(const std::string& message);
+    void send(Buffer* message);
+
+    void shutdown();
+    void forceClose();
+
+    void setConnectionCallback(const ConnectionCallback& cb) { connectionCallback_ = cb; }
+    void setMessageCallback(const MessageCallback& cb) { messageCallback_ = cb; }
+    void setWriteCompleteCallback(const WriteCompleteCallback& cb) { writeCompleteCallback_ = cb; }
+    void setHighWaterMarkCallback(const HighWaterMarkCallback& cb, size_t highWaterMark) { 
+        highWaterMarkCallback_ = cb; 
+        highWaterMark_ = highWaterMark;
+    }
+    void setCloseCallback(const CloseCallback& cb) { closeCallback_ = cb; }
+
+    // Context management
+    void setContext(const std::any& context) { context_ = context; }
+    const std::any& getContext() const { return context_; }
+    std::any* getMutableContext() { return &context_; }
+
+    // Internal use
     void connectEstablished();
+    void connectDestroyed();
+
+private:
+    enum StateE { kDisconnected, kConnecting, kConnected, kDisconnecting };
 
     void handleRead();
     void handleWrite();
     void handleClose();
+    void handleError();
+    
+    void sendInLoop(const std::string& message);
+    void sendInLoop(const void* data, size_t len);
+    void shutdownInLoop();
+    void forceCloseInLoop();
+    void setState(StateE s) { state_ = s; }
 
-    // Send data (thread-safe, can be called from any thread)
-    void send(const std::string& data);
-
-    // Internal use (must be called in IO loop)
-    void appendResponse(const std::string& data);
-    void shutdown();
-    void setCloseAfterWrite(bool close) { close_after_write_ = close; }
-
-    void setProtocol(Protocol p) { protocol_ = p; }
-    Protocol protocol() const { return protocol_; }
-
-private:
-    HttpServer* server_;
     EventLoop* loop_;
-    int fd_;
-    std::string ip_;
-    bool closed_;
-    bool close_after_write_ = false;
-    std::string read_buffer_;
-    std::string write_buffer_;
+    const std::string name_;
+    std::atomic<StateE> state_;
+    bool reading_;
+    
     std::unique_ptr<Channel> channel_;
-    Protocol protocol_ = Protocol::HTTP;
+    const InetAddress localAddr_;
+    const InetAddress peerAddr_;
+    
+    ConnectionCallback connectionCallback_;
+    MessageCallback messageCallback_;
+    WriteCompleteCallback writeCompleteCallback_;
+    HighWaterMarkCallback highWaterMarkCallback_;
+    CloseCallback closeCallback_;
+    
+    size_t highWaterMark_;
+    Buffer inputBuffer_;
+    Buffer outputBuffer_;
+    std::any context_;
 };
+
 

@@ -1,6 +1,7 @@
 #include "rtsp/rtsp_codec.h"
 #include <sstream>
 #include <algorithm>
+#include <string_view>
 
 namespace protocols {
 
@@ -26,54 +27,87 @@ std::string RtspCodec::methodToString(RtspMethod method) {
     }
 }
 
-size_t RtspCodec::parseRequest(const std::string& buffer, RtspRequest& out_request) {
-    size_t header_end = buffer.find("\r\n\r\n");
-    if (header_end == std::string::npos) {
+size_t RtspCodec::parseRequest(Buffer* buf, RtspRequest& out_request) {
+    const char* begin = buf->peek();
+    const char* end = buf->beginWrite();
+
+    // Find double CRLF
+    const char crlf2[] = "\r\n\r\n";
+    const char* headersEnd = std::search(begin, end, crlf2, crlf2 + 4);
+
+    if (headersEnd == end) {
         return 0; // Incomplete
     }
 
-    std::string header_part = buffer.substr(0, header_end);
-    std::istringstream stream(header_part);
-    std::string line;
+    std::string_view headerPart(begin, headersEnd - begin);
+    
+    size_t lineStart = 0;
+    size_t lineEnd = headerPart.find("\r\n");
 
     // Request line
-    if (std::getline(stream, line) && !line.empty()) {
-        if (line.back() == '\r') line.pop_back();
-        std::istringstream line_stream(line);
-        std::string method_str;
-        line_stream >> method_str >> out_request.url >> out_request.version;
-        out_request.method = parseMethod(method_str);
+    if (lineEnd == std::string_view::npos) {
+        // Should be impossible if \r\n\r\n found, unless it's just empty lines?
+        return 0; 
     }
+
+    std::string_view requestLine = headerPart.substr(0, lineEnd);
+    
+    // Parse Method URL Version
+    // "OPTIONS rtsp://example.com/media.mp4 RTSP/1.0"
+    size_t methodEnd = requestLine.find(' ');
+    if (methodEnd == std::string_view::npos) return 0; // Invalid
+    
+    std::string methodStr(requestLine.substr(0, methodEnd));
+    out_request.method = parseMethod(methodStr);
+    
+    size_t urlStart = methodEnd + 1;
+    size_t urlEnd = requestLine.find(' ', urlStart);
+    if (urlEnd == std::string_view::npos) return 0; // Invalid
+    
+    out_request.url = std::string(requestLine.substr(urlStart, urlEnd - urlStart));
+    out_request.version = std::string(requestLine.substr(urlEnd + 1));
 
     // Headers
-    while (std::getline(stream, line) && !line.empty()) {
-        if (line.back() == '\r') line.pop_back();
+    lineStart = lineEnd + 2;
+    size_t contentLength = 0;
+
+    while (lineStart < headerPart.size()) {
+        lineEnd = headerPart.find("\r\n", lineStart);
+        if (lineEnd == std::string_view::npos) lineEnd = headerPart.size();
+        
+        std::string_view line = headerPart.substr(lineStart, lineEnd - lineStart);
         size_t colon = line.find(':');
-        if (colon != std::string::npos) {
-            std::string key = line.substr(0, colon);
-            std::string value = line.substr(colon + 1);
-            // Trim spaces
-            value.erase(0, value.find_first_not_of(" \t"));
-            out_request.headers[key] = value;
+        if (colon != std::string_view::npos) {
+            std::string key(line.substr(0, colon));
+            std::string_view val = line.substr(colon + 1);
+            while(!val.empty() && (val.front() == ' ' || val.front() == '\t')) val.remove_prefix(1);
+            
+            out_request.headers[key] = std::string(val);
             
             if (key == "CSeq") {
-                out_request.cseq = std::stoi(value);
+                try {
+                    out_request.cseq = std::stoi(std::string(val));
+                } catch(...) {}
+            }
+            if (key == "Content-Length") {
+                try {
+                    contentLength = std::stoull(std::string(val));
+                } catch(...) {}
             }
         }
+        lineStart = lineEnd + 2;
     }
 
-    size_t body_start = header_end + 4;
-    size_t content_length = 0;
-    if (out_request.headers.count("Content-Length")) {
-        content_length = std::stoi(out_request.headers["Content-Length"]);
-    }
-
-    if (buffer.size() < body_start + content_length) {
+    size_t totalLen = (headersEnd - begin) + 4 + contentLength;
+    if (buf->readableBytes() < totalLen) {
         return 0; // Body incomplete
     }
 
-    out_request.body = buffer.substr(body_start, content_length);
-    return body_start + content_length;
+    if (contentLength > 0) {
+        out_request.body = std::string(headersEnd + 4, contentLength);
+    }
+
+    return totalLen;
 }
 
 std::string RtspCodec::buildResponse(const RtspResponse& response) {
