@@ -60,14 +60,6 @@ static std::string getQueryParam(const std::string& path, const std::string& key
     return "";
 }
 
-static std::string generateConnectionId() {
-    auto now = std::chrono::system_clock::now().time_since_epoch();
-    auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
-    unsigned long long id = ++g_connection_counter;
-    std::ostringstream oss;
-    oss << "conn-" << millis << "-" << id;
-    return oss.str();
-}
 
 ChatRoomServer::ChatRoomServer(int port)
     : metrics_collector_(std::make_shared<MetricsCollector>()),
@@ -536,9 +528,5 @@ void ChatRoomServer::handleRtspMessage(std::shared_ptr<TcpConnection> conn, cons
 void ChatRoomServer::stop() {
     LOG_INFO("聊天室服务器停止");
     running_ = false;
-    cleanup_cv_.notify_all();
-    if (cleanup_thread_.joinable()) {
-        cleanup_thread_.join();
-    }
     http_server_->stop();
 }
