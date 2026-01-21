@@ -1,5 +1,5 @@
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-include_directories(${CMAKE_SOURCE_DIR}/server/include)
+include_directories(${CMAKE_SOURCE_DIR}/server)
 
 add_library(chatroom_client_lib
     src/chatroom_client.cpp

@@ -1,7 +1,7 @@
 # 测试模块配置
 
 # 包含必要的头文件路径
-include_directories(${CMAKE_SOURCE_DIR}/server/include)
+include_directories(${CMAKE_SOURCE_DIR}/server)
 include_directories(${CMAKE_SOURCE_DIR}/client/include)
 
 # 单元测试

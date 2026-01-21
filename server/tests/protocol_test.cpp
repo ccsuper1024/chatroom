@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
-#include "protocols/websocket_codec.h"
-#include "protocols/rtsp_codec.h"
-#include "protocols/rtp_rtcp.h"
-#include "protocols/crypto_utils.h"
+#include "websocket/websocket_codec.h"
+#include "rtsp/rtsp_codec.h"
+#include "rtsp/rtp_rtcp.h"
+#include "utils/crypto_utils.h"
 
 using namespace protocols;
 

@@ -1,7 +1,13 @@
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
-file(GLOB_RECURSE SERVER_SOURCES "src/*.cpp")
-list(FILTER SERVER_SOURCES EXCLUDE REGEX "src/server_main.cpp")
+file(GLOB_RECURSE SERVER_SOURCES 
+    "net/*.cpp" 
+    "http/*.cpp" 
+    "websocket/*.cpp" 
+    "rtsp/*.cpp" 
+    "chatroom/*.cpp" 
+    "utils/*.cpp"
+)
 
 add_library(chatroom_server_lib
     ${SERVER_SOURCES}
@@ -9,10 +15,11 @@ add_library(chatroom_server_lib
 target_link_libraries(chatroom_server_lib
     PUBLIC chatroom_base
     PUBLIC nlohmann_json::nlohmann_json
+    PUBLIC spdlog::spdlog
 )
 
 add_executable(chatroom_server
-    src/server_main.cpp
+    main.cpp
 )
 target_link_libraries(chatroom_server
     PRIVATE chatroom_server_lib
@@ -29,5 +36,3 @@ target_link_libraries(chatroom_test
     PRIVATE GTest::gtest_main
     PRIVATE pthread
 )
-
-

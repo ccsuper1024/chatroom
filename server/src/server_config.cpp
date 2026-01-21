@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <fstream>
 #include <iostream>
-#include <sstream>
 #include <thread>
 
 static std::string trim(const std::string &str) {

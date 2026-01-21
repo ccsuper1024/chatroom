@@ -1,9 +1,18 @@
 #include <gtest/gtest.h>
-#include "chatroom_server.h"
-#include "metrics_collector.h"
-#include "server_config.h"
+#include "chatroom/chatroom_server.h"
+#include "utils/metrics_collector.h"
+#include "utils/server_config.h"
 #include "database_manager.h"
+#include "net/tcp_connection.h"
+#include "net/event_loop.h"
+#include "websocket/websocket_codec.h"
+#include "rtsp/rtsp_codec.h"
 #include <nlohmann/json.hpp>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <future>
+#include <chrono>
 
 using json = nlohmann::json;
 
@@ -58,8 +67,93 @@ protected:
         return server_->metrics_collector_->getMetrics();
     }
 
+    HttpServer* GetHttpServer() {
+        return server_->http_server_.get();
+    }
+
+    void HandleWebSocketMessage(std::shared_ptr<TcpConnection> conn, const protocols::WebSocketFrame& frame) {
+        server_->handleWebSocketMessage(conn, frame);
+    }
+
     std::unique_ptr<ChatRoomServer> server_;
 };
+
+TEST_F(ChatRoomServerTest, WebSocketLoginAndMessage) {
+    EventLoop loop;
+    int fds[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
+    
+    // Set non-blocking
+    fcntl(fds[0], F_SETFL, O_NONBLOCK);
+    fcntl(fds[1], F_SETFL, O_NONBLOCK);
+
+    auto conn = std::make_shared<TcpConnection>(GetHttpServer(), &loop, fds[0], "127.0.0.1");
+    
+    // 1. Login
+    json login_req;
+    login_req["type"] = "login";
+    login_req["username"] = "ws_user";
+    std::string login_str = login_req.dump();
+    
+    protocols::WebSocketFrame frame;
+    frame.opcode = protocols::WebSocketOpcode::TEXT;
+    frame.payload.assign(login_str.begin(), login_str.end());
+    
+    HandleWebSocketMessage(conn, frame);
+    conn->handleWrite(); // Flush buffer
+    
+    // Read response from fds[1]
+    char buf[1024];
+    int n = read(fds[1], buf, sizeof(buf));
+    ASSERT_GT(n, 0);
+    
+    std::vector<uint8_t> recv_buf(buf, buf + n);
+    protocols::WebSocketFrame resp_frame;
+    int consumed = protocols::WebSocketCodec::parseFrame(recv_buf, resp_frame);
+    ASSERT_GT(consumed, 0);
+    
+    std::string resp_payload(resp_frame.payload.begin(), resp_frame.payload.end());
+    auto resp_json = json::parse(resp_payload);
+    EXPECT_EQ(resp_json["type"], "login_response");
+    EXPECT_TRUE(resp_json["success"]);
+    
+    // 2. Send Message
+    json msg_req;
+    msg_req["type"] = "message";
+    msg_req["content"] = "hello ws";
+    std::string msg_str = msg_req.dump();
+    
+    frame.payload.assign(msg_str.begin(), msg_str.end());
+    HandleWebSocketMessage(conn, frame);
+    conn->handleWrite(); // Flush buffer
+    
+    // Read response
+    n = read(fds[1], buf, sizeof(buf));
+    ASSERT_GT(n, 0);
+    
+    recv_buf.assign(buf, buf + n);
+    consumed = protocols::WebSocketCodec::parseFrame(recv_buf, resp_frame);
+    ASSERT_GT(consumed, 0);
+    
+    resp_payload.assign(resp_frame.payload.begin(), resp_frame.payload.end());
+    resp_json = json::parse(resp_payload);
+    EXPECT_EQ(resp_json["type"], "message_response");
+    EXPECT_TRUE(resp_json["success"]);
+    
+    // Verify DB
+    auto msgs = DatabaseManager::instance().getHistory(10);
+    bool found = false;
+    for (const auto& m : msgs) {
+        if (m.username == "ws_user" && m.content == "hello ws") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found);
+    
+    close(fds[1]);
+    // fds[0] closed by TcpConnection
+}
 
 TEST_F(ChatRoomServerTest, LoginSuccess) {
     json req_body;
@@ -180,4 +274,62 @@ TEST_F(ChatRoomServerTest, PrivateMessageTest) {
         }
     }
     EXPECT_FALSE(foundC);
+}
+
+TEST_F(ChatRoomServerTest, RtspOptionsAndDescribe) {
+    EventLoop loop;
+    int fds[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
+    fcntl(fds[0], F_SETFL, O_NONBLOCK);
+    fcntl(fds[1], F_SETFL, O_NONBLOCK);
+
+    auto conn = std::make_shared<TcpConnection>(GetHttpServer(), &loop, fds[0], "127.0.0.1");
+
+    // 1. Send OPTIONS
+    std::string options_req = 
+        "OPTIONS rtsp://127.0.0.1:8080/audio RTSP/1.0\r\n"
+        "CSeq: 1\r\n"
+        "User-Agent: ChatRoomClient\r\n"
+        "\r\n";
+    
+    write(fds[1], options_req.data(), options_req.size());
+    
+    // Trigger read
+    conn->handleRead();
+    conn->handleWrite(); // Flush output
+    
+    // Read response
+    char buf[4096];
+    int n = read(fds[1], buf, sizeof(buf));
+    ASSERT_GT(n, 0);
+    
+    std::string resp_str(buf, n);
+    // Log for debugging
+    // std::cout << "RTSP Resp: " << resp_str << std::endl;
+    
+    ASSERT_TRUE(resp_str.find("RTSP/1.0 200 OK") != std::string::npos);
+    ASSERT_TRUE(resp_str.find("CSeq: 1") != std::string::npos);
+    ASSERT_TRUE(resp_str.find("Public: OPTIONS") != std::string::npos);
+    
+    // 2. Send DESCRIBE
+    std::string describe_req = 
+        "DESCRIBE rtsp://127.0.0.1:8080/audio RTSP/1.0\r\n"
+        "CSeq: 2\r\n"
+        "Accept: application/sdp\r\n"
+        "\r\n";
+        
+    write(fds[1], describe_req.data(), describe_req.size());
+    conn->handleRead();
+    conn->handleWrite();
+    
+    n = read(fds[1], buf, sizeof(buf));
+    ASSERT_GT(n, 0);
+    
+    resp_str.assign(buf, n);
+    ASSERT_TRUE(resp_str.find("RTSP/1.0 200 OK") != std::string::npos);
+    ASSERT_TRUE(resp_str.find("CSeq: 2") != std::string::npos);
+    ASSERT_TRUE(resp_str.find("Content-Type: application/sdp") != std::string::npos);
+    ASSERT_TRUE(resp_str.find("m=audio 0 RTP/AVP 0") != std::string::npos);
+    
+    close(fds[1]);
 }

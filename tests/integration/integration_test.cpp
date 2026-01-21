@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
-#include "chatroom_server.h"
+#include "chatroom/chatroom_server.h"
 #include "chatroom_client.h"
-#include "server_config.h"
+#include "utils/server_config.h"
 #include <thread>
 #include <chrono>
 #include <vector>
