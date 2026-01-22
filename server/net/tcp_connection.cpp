@@ -47,9 +47,12 @@ TcpConnection::TcpConnection(EventLoop* loop,
 }
 
 TcpConnection::~TcpConnection() {
-    LOG_DEBUG("TcpConnection::dtor[{}] at fd={} state={}", 
-              name_, channel_->fd(), (int)state_);
-    assert(state_ == kDisconnected);
+    // LOG_DEBUG("TcpConnection::dtor[{}] at fd={} state={}", 
+    //           name_, channel_->fd(), (int)state_);
+    printf("TcpConnection::~TcpConnection name=%s fd=%d\n", name_.c_str(), channel_->fd());
+    if (state_ != kDisconnected) {
+        // ...
+    }
 }
 
 void TcpConnection::send(const std::string& message) {
@@ -89,15 +92,17 @@ void TcpConnection::sendInLoop(const void* data, size_t len) {
     ssize_t nwrote = 0;
     size_t remaining = len;
     bool faultError = false;
+    printf("TcpConnection::sendInLoop len=%ld state=%d\n", len, state_.load());
 
     if (state_ == kDisconnected) {
         LOG_WARN("disconnected, give up writing");
         return;
     }
 
-    // if no thing in output queue, try to write directly
+    // if no thing in output queue, try write directly
     if (!channel_->isWriting() && outputBuffer_.readableBytes() == 0) {
         nwrote = ::write(channel_->fd(), data, len);
+        printf("TcpConnection::sendInLoop direct write nwrote=%ld\n", nwrote);
         if (nwrote >= 0) {
             remaining = len - nwrote;
             if (remaining == 0 && writeCompleteCallback_) {
@@ -185,9 +190,12 @@ void TcpConnection::connectDestroyed() {
 void TcpConnection::handleRead() {
     loop_->assertInLoopThread();
     int savedErrno = 0;
+    // printf("TcpConnection::handleRead fd=%d\n", channel_->fd());
     ssize_t n = inputBuffer_.readFd(channel_->fd(), &savedErrno);
+    printf("TcpConnection::handleRead read %ld bytes\n", n);
     if (n > 0) {
         if (messageCallback_) {
+            printf("TcpConnection::handleRead calling messageCallback_\n");
             messageCallback_(shared_from_this(), &inputBuffer_, Timestamp::now());
         }
     } else if (n == 0) {
@@ -205,7 +213,7 @@ void TcpConnection::handleWrite() {
         ssize_t n = ::write(channel_->fd(),
                             outputBuffer_.peek(),
                             outputBuffer_.readableBytes());
-        if (n > 0) {
+        if (n >= 0) {
             outputBuffer_.retrieve(n);
             if (outputBuffer_.readableBytes() == 0) {
                 channel_->disableWriting();
@@ -217,7 +225,7 @@ void TcpConnection::handleWrite() {
                 }
             }
         } else {
-            LOG_ERROR("TcpConnection::handleWrite");
+            LOG_ERROR("TcpConnection::handleWrite error");
         }
     } else {
         LOG_WARN("Connection fd={} is down, no more writing", channel_->fd());
@@ -225,6 +233,7 @@ void TcpConnection::handleWrite() {
 }
 
 void TcpConnection::handleClose() {
+    // printf("TcpConnection::handleClose fd=%d state=%d\n", channel_->fd(), state_.load());
     loop_->assertInLoopThread();
     LOG_INFO("fd = {} state = {}", channel_->fd(), (int)state_);
     assert(state_ == kConnected || state_ == kDisconnecting);

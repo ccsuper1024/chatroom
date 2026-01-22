@@ -1,4 +1,5 @@
 #include "chatroom/chatroom_server.h"
+#include "chat_service.h"
 #include "utils/json_utils.h"
 #include "logger.h"
 #include "utils/server_config.h"
@@ -63,8 +64,9 @@ static std::string getQueryParam(const std::string& path, const std::string& key
 
 ChatRoomServer::ChatRoomServer(int port)
     : metrics_collector_(std::make_shared<MetricsCollector>()),
-      session_manager_(std::make_unique<SessionManager>(metrics_collector_)),
+      session_manager_(std::make_unique<SessionManager>(&loop_, metrics_collector_)),
       running_(false) {
+    chat_service_ = std::make_unique<ChatService>(metrics_collector_, session_manager_.get());
     http_server_ = std::make_unique<HttpServer>(&loop_, port);
     
     http_server_->setWebSocketHandler([this](std::shared_ptr<TcpConnection> conn, const protocols::WebSocketFrame& frame) {
@@ -73,6 +75,14 @@ ChatRoomServer::ChatRoomServer(int port)
 
     http_server_->setRtspHandler([this](std::shared_ptr<TcpConnection> conn, const protocols::RtspRequest& req) {
         handleRtspMessage(conn, req);
+    });
+
+    http_server_->setSipHandler([this](std::shared_ptr<TcpConnection> conn, const SipRequest& req, const std::string& raw_msg) {
+        chat_service_->handleSipMessage(conn, req, raw_msg);
+    });
+
+    http_server_->setFtpHandler([this](std::shared_ptr<TcpConnection> conn, const std::string& command) {
+        chat_service_->handleFtpMessage(conn, command);
     });
 
     http_server_->registerHandler("/login", 
@@ -93,6 +103,8 @@ ChatRoomServer::ChatRoomServer(int port)
     http_server_->registerHandler("/metrics",
         [this](const HttpRequest& req) { return handleMetrics(req); });
 }
+
+ChatRoomServer::~ChatRoomServer() = default;
 
 void ChatRoomServer::start() {
     LOG_INFO("聊天室服务器启动");

@@ -18,6 +18,10 @@
 #include <atomic>
 #include <condition_variable>
 
+class EventLoop;
+class TcpConnection;
+class ChatService;
+
 /**
  * @brief 聊天室服务器主类
  * 
@@ -34,6 +38,11 @@ public:
      */
     explicit ChatRoomServer(int port);
     
+    /**
+     * @brief 析构函数
+     */
+    ~ChatRoomServer();
+
     /**
      * @brief 启动聊天室服务器
      * 
@@ -56,6 +65,7 @@ private:
 
     std::shared_ptr<MetricsCollector> metrics_collector_; ///< 指标收集器
     std::unique_ptr<SessionManager> session_manager_;   ///< 会话管理器
+    std::unique_ptr<ChatService> chat_service_;         ///< 聊天业务服务
     
     std::chrono::system_clock::time_point start_time_;  ///< 服务器启动时间
     std::atomic<bool> running_;                         ///< 运行状态标志

@@ -70,7 +70,10 @@ public:
      */
     LoginResult login(const std::string& username);
     
-<<<<<<< HEAD
+    // SIP Session Management
+    void registerSipSession(const std::string& username, std::shared_ptr<TcpConnection> conn);
+    std::shared_ptr<TcpConnection> getSipConnection(const std::string& username);
+
     /**
      * @brief 更新用户心跳
      * @param connection_id 连接ID
@@ -78,12 +81,6 @@ public:
      * @return true 更新成功
      * @return false 会话不存在或更新失败
      */
-=======
-    // SIP Session Management
-    void registerSipSession(const std::string& username, std::shared_ptr<TcpConnection> conn);
-    std::shared_ptr<TcpConnection> getSipConnection(const std::string& username);
-
->>>>>>> 608261f (Refactor: Unified fd abstraction, SIP/FTP support, and directory restructuring)
     bool updateHeartbeat(const std::string& connection_id, const std::string& client_version);
     
     // Getters

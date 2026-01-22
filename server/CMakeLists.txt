@@ -5,6 +5,7 @@ file(GLOB_RECURSE SERVER_SOURCES
     "http/*.cpp" 
     "websocket/*.cpp" 
     "rtsp/*.cpp" 
+    "sip/*.cpp"
     "chatroom/*.cpp" 
     "utils/*.cpp"
 )

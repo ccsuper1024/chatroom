@@ -1,4 +1,4 @@
-#include "chatroom/chat_service.h"
+#include "chat_service.h"
 #include "chatroom/session_manager.h"
 #include "utils/json_utils.h"
 #include "utils/server_error.h"

@@ -15,6 +15,8 @@ class Socket;
 
 class TcpConnection : public std::enable_shared_from_this<TcpConnection> {
 public:
+    friend class ChatRoomServerTest;
+
     TcpConnection(EventLoop* loop,
                   const std::string& name,
                   int sockfd,
@@ -35,6 +37,7 @@ public:
 
     void shutdown();
     void forceClose();
+    void setCloseAfterWrite(bool close) { if (close) shutdown(); }
 
     void setConnectionCallback(const ConnectionCallback& cb) { connectionCallback_ = cb; }
     void setMessageCallback(const MessageCallback& cb) { messageCallback_ = cb; }
@@ -54,11 +57,15 @@ public:
     void connectEstablished();
     void connectDestroyed();
 
+    // Changed to public for testing
+    void handleRead();
+    void handleWrite();
+
 private:
     enum StateE { kDisconnected, kConnecting, kConnected, kDisconnecting };
 
-    void handleRead();
-    void handleWrite();
+    // void handleRead(); // Moved to public
+    // void handleWrite(); // Moved to public
     void handleClose();
     void handleError();
     

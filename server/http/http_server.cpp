@@ -22,7 +22,7 @@
 #include <string_view>
 
 struct HttpConnectionContext {
-    enum Protocol { kHttp, kWebSocket, kRtsp };
+    enum Protocol { kHttp, kWebSocket, kRtsp, kSip, kFtp };
     Protocol protocol = kHttp;
 };
 
@@ -61,6 +61,14 @@ void HttpServer::setRtspHandler(RtspHandler handler) {
     rtsp_handler_ = handler;
 }
 
+void HttpServer::setSipHandler(SipHandler handler) {
+    sip_handler_ = handler;
+}
+
+void HttpServer::setFtpHandler(FtpHandler handler) {
+    ftp_handler_ = handler;
+}
+
 void HttpServer::start() {
     server_.start();
     LOG_INFO("HTTP服务器启动，监听端口: {}", server_.ipPort());
@@ -94,7 +102,13 @@ void HttpServer::onConnection(const TcpConnectionPtr& conn) {
 }
 
 void HttpServer::onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp receiveTime) {
+    // printf("HttpServer::onMessage\n");
+    if (!conn->getContext().has_value()) {
+        conn->setContext(HttpConnectionContext());
+    }
+
     HttpConnectionContext* context = std::any_cast<HttpConnectionContext>(conn->getMutableContext());
+    // printf("HttpServer::onMessage protocol=%d\n", context->protocol);
 
     while (buf->readableBytes() > 0) {
         if (context->protocol == HttpConnectionContext::kHttp) {
@@ -106,6 +120,14 @@ void HttpServer::onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp 
                  std::string_view firstLine(buf->peek(), crlf - buf->peek());
                  if (firstLine.find("RTSP/1.0") != std::string_view::npos) {
                      context->protocol = HttpConnectionContext::kRtsp;
+                     continue;
+                 }
+                 if (firstLine.find("SIP/2.0") != std::string_view::npos) {
+                     context->protocol = HttpConnectionContext::kSip;
+                     continue;
+                 }
+                 if (firstLine.substr(0, 5) == "USER " || firstLine.substr(0, 5) == "user ") {
+                     context->protocol = HttpConnectionContext::kFtp;
                      continue;
                  }
             }
@@ -168,6 +190,31 @@ void HttpServer::onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp 
                 buf->retrieve(consumed);
                 if (rtsp_handler_) {
                     rtsp_handler_(conn, rtspReq);
+                }
+            } else {
+                break; // Incomplete
+            }
+        } else if (context->protocol == HttpConnectionContext::kSip) {
+            std::string data(buf->peek(), buf->readableBytes());
+            SipRequest sipReq;
+            size_t consumed = SipCodec::parseRequest(data, sipReq);
+            
+            if (consumed > 0) {
+                std::string raw_msg(buf->peek(), consumed);
+                buf->retrieve(consumed);
+                if (sip_handler_) {
+                    sip_handler_(conn, sipReq, raw_msg);
+                }
+            } else {
+                break; // Incomplete
+            }
+        } else if (context->protocol == HttpConnectionContext::kFtp) {
+            const char* crlf = buf->findCRLF();
+            if (crlf) {
+                std::string command(buf->peek(), crlf - buf->peek());
+                buf->retrieve(crlf + 2 - buf->peek());
+                if (ftp_handler_) {
+                    ftp_handler_(conn, command);
                 }
             } else {
                 break; // Incomplete
