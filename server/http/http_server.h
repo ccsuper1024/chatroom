@@ -60,6 +60,12 @@ public:
     void setWebSocketHandler(WebSocketHandler handler);
     
     /**
+     * @brief 设置静态资源目录
+     * @param dir 静态资源根目录路径 (例如 "wwwroot")
+     */
+    void setStaticResourceDir(const std::string& dir);
+
+    /**
      * @brief 启动服务器
      * 
      * 初始化Acceptor并进入事件循环（阻塞）。
@@ -114,5 +120,15 @@ private:
     ThreadPool thread_pool_;
     
     WebSocketHandler ws_handler_;
+    std::string static_resource_dir_;
+    
+    /**
+     * @brief 处理静态文件请求
+     * @param path 文件相对路径
+     * @return HTTP响应
+     */
+    HttpResponse serveStaticFile(const std::string& path);
+    
+    std::string buildResponse(const HttpResponse& resp);
 };
 

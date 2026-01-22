@@ -17,6 +17,7 @@
 #include <sstream>
 #include <map>
 #include <fstream>
+#include <filesystem>
 #include <algorithm>
 #include <cctype>
 #include <string_view>
@@ -55,7 +56,11 @@ void HttpServer::registerHandler(const std::string& path, HttpHandler handler) {
 }
 
 void HttpServer::setWebSocketHandler(WebSocketHandler handler) {
-    ws_handler_ = handler;
+    ws_handler_ = std::move(handler);
+}
+
+void HttpServer::setStaticResourceDir(const std::string& dir) {
+    static_resource_dir_ = dir;
 }
 
 void HttpServer::start() {
@@ -91,6 +96,7 @@ void HttpServer::onConnection(const TcpConnectionPtr& conn) {
 }
 
 void HttpServer::onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp receiveTime) {
+    (void)receiveTime;
     // printf("HttpServer::onMessage\n");
     if (!conn->getContext().has_value()) {
         conn->setContext(HttpConnectionContext());
@@ -166,19 +172,102 @@ void HttpServer::onRequest(const TcpConnectionPtr& conn, const HttpRequest& req)
 
     if (handlers_.count(handler_path)) {
         // Dispatch to thread pool
-        thread_pool_.post([conn, req, handler = handlers_[handler_path]]() {
+        thread_pool_.post([this, conn, req, handler = handlers_[handler_path]]() {
             HttpResponse resp = handler(req);
             
             // Send response back in IO loop
-            conn->getLoop()->runInLoop([conn, resp]() {
+            conn->getLoop()->runInLoop([this, conn, resp]() {
                 std::string responseStr = buildResponse(resp);
                 conn->send(responseStr);
             });
         });
     } else {
+        // Try to serve static file
+        if (!static_resource_dir_.empty() && req.method == "GET") {
+            thread_pool_.post([this, conn, req]() {
+                std::string path = req.path;
+                // Default to index.html for root
+                if (path == "/") {
+                    path = "/index.html";
+                }
+                
+                HttpResponse resp = serveStaticFile(path);
+                
+                conn->getLoop()->runInLoop([conn, resp, this]() {
+                    std::string responseStr = buildResponse(resp);
+                    conn->send(responseStr);
+                });
+            });
+            return;
+        }
+
         HttpResponse resp;
         resp.status_code = 404;
         resp.status_text = "Not Found";
         conn->send(buildResponse(resp));
     }
+}
+
+HttpResponse HttpServer::serveStaticFile(const std::string& path) {
+    HttpResponse resp;
+    try {
+        // Sanitize path to prevent directory traversal
+        if (path.find("..") != std::string::npos) {
+            resp.status_code = 403;
+            resp.status_text = "Forbidden";
+            return resp;
+        }
+
+        std::filesystem::path resource_path(static_resource_dir_);
+        // Remove leading slash
+        std::string relative_path = path.size() > 0 && path[0] == '/' ? path.substr(1) : path;
+        std::filesystem::path file_path = resource_path / relative_path;
+
+        if (std::filesystem::exists(file_path) && std::filesystem::is_regular_file(file_path)) {
+            std::ifstream file(file_path, std::ios::binary);
+            if (file) {
+                std::stringstream buffer;
+                buffer << file.rdbuf();
+                resp.body = buffer.str();
+                resp.status_code = 200;
+                resp.status_text = "OK";
+                
+                // Determine Content-Type
+                std::string ext = file_path.extension().string();
+                if (ext == ".html") resp.content_type = "text/html";
+                else if (ext == ".css") resp.content_type = "text/css";
+                else if (ext == ".js") resp.content_type = "application/javascript";
+                else if (ext == ".png") resp.content_type = "image/png";
+                else if (ext == ".jpg" || ext == ".jpeg") resp.content_type = "image/jpeg";
+                else if (ext == ".svg") resp.content_type = "image/svg+xml";
+                else if (ext == ".ico") resp.content_type = "image/x-icon";
+                else resp.content_type = "application/octet-stream";
+                
+                return resp;
+            }
+        }
+        
+        resp.status_code = 404;
+        resp.status_text = "Not Found";
+    } catch (const std::exception& e) {
+        LOG_ERROR("Serve static file error: {}", e.what());
+        resp.status_code = 500;
+        resp.status_text = "Internal Server Error";
+    }
+    return resp;
+}
+
+std::string HttpServer::buildResponse(const HttpResponse& resp) {
+    std::ostringstream oss;
+    oss << "HTTP/1.1 " << resp.status_code << " " << resp.status_text << "\r\n";
+    oss << "Content-Type: " << resp.content_type << "\r\n";
+    oss << "Content-Length: " << resp.body.size() << "\r\n";
+    for (const auto& [key, value] : resp.headers) {
+        oss << key << ": " << value << "\r\n";
+    }
+    oss << "Connection: keep-alive\r\n";
+    oss << "Access-Control-Allow-Origin: *\r\n";
+    oss << "\r\n";
+    oss << resp.body;
+    return oss.str();
 }

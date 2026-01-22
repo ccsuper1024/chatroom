@@ -75,6 +75,8 @@ ChatRoomServer::ChatRoomServer(int port)
     http_server_->setWebSocketHandler([this](std::shared_ptr<TcpConnection> conn, const protocols::WebSocketFrame& frame) {
         handleWebSocketMessage(conn, frame);
     });
+    
+    http_server_->setStaticResourceDir("wwwroot");
 
     rtsp_server_->setRtspHandler([this](std::shared_ptr<TcpConnection> conn, const protocols::RtspRequest& req) {
         handleRtspMessage(conn, req);

@@ -27,7 +27,7 @@ set_property(GLOBAL PROPERTY _CMAKE_FindGit_GIT_EXECUTABLE_VERSION
 
 include(ExternalProject)
 ExternalProject_Add(spdlog-populate
-                     "UPDATE_DISCONNECTED" "False" "GIT_REPOSITORY" "https://gitee.com/openharmony/third_party_spdlog.git" "EXTERNALPROJECT_INTERNAL_ARGUMENT_SEPARATOR" "GIT_TAG" "v1.12.0"
+                     "UPDATE_DISCONNECTED" "False" "GIT_REPOSITORY" "https://gitee.com/mirror_1/spdlog.git" "EXTERNALPROJECT_INTERNAL_ARGUMENT_SEPARATOR" "GIT_TAG" "v1.11.0"
                     SOURCE_DIR          "/home/chenchao/code/cplusplus/chatroom/third_party/spdlog"
                     BINARY_DIR          "/home/chenchao/code/cplusplus/chatroom/third_party/spdlog-build"
                     CONFIGURE_COMMAND   ""

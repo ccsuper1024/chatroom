@@ -39,6 +39,12 @@ dist/*
 # third_party/
 third_party/*-build/
 third_party/*-subbuild/
+third_party/node-*/
+
+# 前端构建
+client_web/node_modules/
+client_web/dist/
+wwwroot/
 
 # 运行时数据
 *.db
