@@ -1,23 +1,15 @@
-# Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
-# file Copyright.txt or https://cmake.org/licensing for details.
 
-cmake_minimum_required(VERSION 3.5)
-
-if(EXISTS "/home/chenchao/code/cplusplus/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitclone-lastrun.txt" AND EXISTS "/home/chenchao/code/cplusplus/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitinfo.txt" AND
-  "/home/chenchao/code/cplusplus/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitclone-lastrun.txt" IS_NEWER_THAN "/home/chenchao/code/cplusplus/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitinfo.txt")
-  message(STATUS
-    "Avoiding repeated git clone, stamp file is up to date: "
-    "'/home/chenchao/code/cplusplus/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitclone-lastrun.txt'"
-  )
+if(NOT "/home/chenchao/githubCode/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitinfo.txt" IS_NEWER_THAN "/home/chenchao/githubCode/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitclone-lastrun.txt")
+  message(STATUS "Avoiding repeated git clone, stamp file is up to date: '/home/chenchao/githubCode/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitclone-lastrun.txt'")
   return()
 endif()
 
 execute_process(
-  COMMAND ${CMAKE_COMMAND} -E rm -rf "/home/chenchao/code/cplusplus/chatroom/third_party/spdlog"
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "/home/chenchao/githubCode/chatroom/third_party/spdlog"
   RESULT_VARIABLE error_code
-)
+  )
 if(error_code)
-  message(FATAL_ERROR "Failed to remove directory: '/home/chenchao/code/cplusplus/chatroom/third_party/spdlog'")
+  message(FATAL_ERROR "Failed to remove directory: '/home/chenchao/githubCode/chatroom/third_party/spdlog'")
 endif()
 
 # try the clone 3 times in case there is an odd git clone issue
@@ -25,26 +17,25 @@ set(error_code 1)
 set(number_of_tries 0)
 while(error_code AND number_of_tries LESS 3)
   execute_process(
-    COMMAND "/usr/bin/git"
-            clone --no-checkout --config "advice.detachedHead=false" "https://gitee.com/mirror_1/spdlog.git" "spdlog"
-    WORKING_DIRECTORY "/home/chenchao/code/cplusplus/chatroom/third_party"
+    COMMAND "/usr/bin/git"  clone --no-checkout --config "advice.detachedHead=false" "https://gitee.com/mirror_1/spdlog.git" "spdlog"
+    WORKING_DIRECTORY "/home/chenchao/githubCode/chatroom/third_party"
     RESULT_VARIABLE error_code
-  )
+    )
   math(EXPR number_of_tries "${number_of_tries} + 1")
 endwhile()
 if(number_of_tries GREATER 1)
-  message(STATUS "Had to git clone more than once: ${number_of_tries} times.")
+  message(STATUS "Had to git clone more than once:
+          ${number_of_tries} times.")
 endif()
 if(error_code)
   message(FATAL_ERROR "Failed to clone repository: 'https://gitee.com/mirror_1/spdlog.git'")
 endif()
 
 execute_process(
-  COMMAND "/usr/bin/git"
-          checkout "v1.11.0" --
-  WORKING_DIRECTORY "/home/chenchao/code/cplusplus/chatroom/third_party/spdlog"
+  COMMAND "/usr/bin/git"  checkout v1.11.0 --
+  WORKING_DIRECTORY "/home/chenchao/githubCode/chatroom/third_party/spdlog"
   RESULT_VARIABLE error_code
-)
+  )
 if(error_code)
   message(FATAL_ERROR "Failed to checkout tag: 'v1.11.0'")
 endif()
@@ -52,22 +43,24 @@ endif()
 set(init_submodules TRUE)
 if(init_submodules)
   execute_process(
-    COMMAND "/usr/bin/git" 
-            submodule update --recursive --init 
-    WORKING_DIRECTORY "/home/chenchao/code/cplusplus/chatroom/third_party/spdlog"
+    COMMAND "/usr/bin/git"  submodule update --recursive --init 
+    WORKING_DIRECTORY "/home/chenchao/githubCode/chatroom/third_party/spdlog"
     RESULT_VARIABLE error_code
-  )
+    )
 endif()
 if(error_code)
-  message(FATAL_ERROR "Failed to update submodules in: '/home/chenchao/code/cplusplus/chatroom/third_party/spdlog'")
+  message(FATAL_ERROR "Failed to update submodules in: '/home/chenchao/githubCode/chatroom/third_party/spdlog'")
 endif()
 
 # Complete success, update the script-last-run stamp file:
 #
 execute_process(
-  COMMAND ${CMAKE_COMMAND} -E copy "/home/chenchao/code/cplusplus/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitinfo.txt" "/home/chenchao/code/cplusplus/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitclone-lastrun.txt"
+  COMMAND ${CMAKE_COMMAND} -E copy
+    "/home/chenchao/githubCode/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitinfo.txt"
+    "/home/chenchao/githubCode/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitclone-lastrun.txt"
   RESULT_VARIABLE error_code
-)
+  )
 if(error_code)
-  message(FATAL_ERROR "Failed to copy script-last-run stamp file: '/home/chenchao/code/cplusplus/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitclone-lastrun.txt'")
+  message(FATAL_ERROR "Failed to copy script-last-run stamp file: '/home/chenchao/githubCode/chatroom/third_party/spdlog-subbuild/spdlog-populate-prefix/src/spdlog-populate-stamp/spdlog-populate-gitclone-lastrun.txt'")
 endif()
+

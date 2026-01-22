@@ -76,7 +76,7 @@ ChatRoomServer::ChatRoomServer(int port)
         handleWebSocketMessage(conn, frame);
     });
     
-    http_server_->setStaticResourceDir("wwwroot");
+    http_server_->setStaticResourceDir("client_web/dist");
 
     rtsp_server_->setRtspHandler([this](std::shared_ptr<TcpConnection> conn, const protocols::RtspRequest& req) {
         handleRtspMessage(conn, req);
@@ -89,6 +89,15 @@ ChatRoomServer::ChatRoomServer(int port)
     ftp_server_->setFtpHandler([this](std::shared_ptr<TcpConnection> conn, const std::string& command) {
         chat_service_->handleFtpMessage(conn, command);
     });
+
+    http_server_->registerHandler("/", 
+        [this](const HttpRequest& req) {
+            HttpResponse resp;
+            resp.status_code = 302;
+            resp.status_text = "Found";
+            resp.headers["Location"] = "/login";
+            return resp;
+        });
 
     http_server_->registerHandler("/login", 
         [this](const HttpRequest& req) { return handleLogin(req); });
@@ -150,6 +159,9 @@ void ChatRoomServer::start() {
     LOG_INFO("ChatRoomServer starting on ports: HTTP={}, RTSP={}, SIP={}, FTP={}", 
              http_server_->port(), rtsp_server_->port(), sip_server_->port(), ftp_server_->port());
 
+    // Set static resource directory for frontend
+    http_server_->setStaticResourceDir("/home/chenchao/githubCode/chatroom/client_web/dist");
+
     http_server_->start();
     rtsp_server_->start();
     sip_server_->start();
@@ -169,7 +181,11 @@ void ChatRoomServer::stop() {
 }
 
 HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
-    metrics_collector_->recordRequest("POST", "/login");
+    if (request.method == "GET") {
+        return http_server_->serveStaticFile("/index.html");
+    }
+
+    metrics_collector_->recordRequest(request.method, "/login");
 
     if (!checkRateLimit(request.remote_ip)) {
         return CreateErrorResponse(ErrorCode::RATE_LIMITED);
@@ -290,6 +306,7 @@ HttpResponse ChatRoomServer::handleGetUsers(const HttpRequest& request) {
         for (const auto& session : sessions) {
             json user;
             user["username"] = session.username;
+            user["client_type"] = session.client_type;
             
             auto idle_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - session.last_heartbeat).count();
             auto online_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - session.login_time).count();
@@ -537,7 +554,22 @@ void ChatRoomServer::handleWebSocketMessage(std::shared_ptr<TcpConnection> conn,
             
             if (type == "login") {
                 std::string username = j.value("username", "");
+                std::string password = j.value("password", "");
+                
                 if (validateUsername(username)) {
+                    // Verify password
+                    if (!DatabaseManager::instance().validateUser(username, password)) {
+                        json resp;
+                        resp["type"] = "login_response";
+                        resp["success"] = false;
+                        resp["error"] = "Invalid username or password";
+                        std::string respStr = resp.dump();
+                        auto frameData = protocols::WebSocketCodec::buildFrame(protocols::WebSocketOpcode::TEXT, respStr);
+                        conn->send(std::string(frameData.begin(), frameData.end()));
+                        LOG_WARN("WS Login failed for {}: invalid credentials", username);
+                        return;
+                    }
+
                     {
                         std::lock_guard<std::mutex> lock(ws_mutex_);
                         ws_connections_[conn->name()] = username;

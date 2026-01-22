@@ -258,6 +258,7 @@ HttpResponse ChatService::handleGetUsers(const HttpRequest& request) {
         for (const auto& session : sessions) {
             json user;
             user["username"] = session.username;
+            user["client_type"] = session.client_type;
             
             auto idle_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - session.last_heartbeat).count();
             auto online_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - session.login_time).count();

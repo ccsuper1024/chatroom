@@ -192,6 +192,7 @@ std::vector<User> ChatRoomClient::getUsers() {
             for (const auto& u : resp_json["users"]) {
                 User user;
                 user.username = u.value("username", "unknown");
+                user.client_type = u.value("client_type", "unknown");
                 user.online_seconds = u.value("online_seconds", 0L);
                 user.idle_seconds = u.value("idle_seconds", 0L);
                 users.push_back(user);

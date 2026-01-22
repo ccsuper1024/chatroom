@@ -6,6 +6,7 @@
 
 struct User {
     std::string username;
+    std::string client_type;
     long online_seconds;
     long idle_seconds;
 };

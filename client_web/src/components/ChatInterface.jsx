@@ -1,21 +1,101 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  MessageSquare, Phone, Video, MoreVertical, Mic, Image as ImageIcon, Smile, Send, Search, Users, X, Settings
+  MessageSquare, 
+  Phone, 
+  Video, 
+  MoreVertical, 
+  Mic, 
+  Image as ImageIcon, 
+  Smile, 
+  Send, 
+  Search, 
+  Users, 
+  X, 
+  MicOff, 
+  VideoOff, 
+  PhoneOff,
+  Monitor,
+  Settings
 } from 'lucide-react';
+
+// --- Mock Data ---
+
+const USERS = {
+  me: { id: 'u1', name: '我', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix' },
+  alex: { id: 'u2', name: 'Alex Chen', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex' },
+  sarah: { id: 'u3', name: 'Sarah Wu', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Sarah' },
+  mike: { id: 'u4', name: 'Mike Ross', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Mike' },
+};
+
+const INITIAL_CONVERSATIONS = [
+  {
+    id: 'c1',
+    type: 'p2p',
+    name: 'Alex Chen',
+    avatar: USERS.alex.avatar,
+    status: 'online',
+    lastMessage: '项目进度怎么样了？',
+    time: '10:30',
+    unread: 2,
+    messages: [
+      { id: 'm1', senderId: 'u2', text: '嘿，兄弟！最近怎么样？', time: '10:00', type: 'text' },
+      { id: 'm2', senderId: 'u1', text: '还不错，正在搞那个聊天室项目。', time: '10:05', type: 'text' },
+      { id: 'm3', senderId: 'u2', text: '听起来很酷！支持视频通话吗？', time: '10:06', type: 'text' },
+      { id: 'm4', senderId: 'u1', text: '必须的，正在做 UI 设计。', time: '10:08', type: 'text' },
+      { id: 'm5', senderId: 'u2', text: '项目进度怎么样了？', time: '10:30', type: 'text' },
+    ]
+  },
+  {
+    id: 'c2',
+    type: 'group',
+    name: '前端开发组',
+    avatar: '', // Group avatar logic handled in component
+    status: '32 成员',
+    lastMessage: 'Sarah: 下午两点开会',
+    time: '09:15',
+    unread: 0,
+    messages: [
+      { id: 'gm1', senderId: 'u3', text: '大家早上好！', time: '09:00', type: 'text' },
+      { id: 'gm2', senderId: 'u4', text: '早安！今天要把那个 Bug 修了。', time: '09:05', type: 'text' },
+      { id: 'gm3', senderId: 'u3', text: '下午两点开会，大家准时参加。', time: '09:15', type: 'text' },
+    ]
+  },
+  {
+    id: 'c3',
+    type: 'p2p',
+    name: 'Sarah Wu',
+    avatar: USERS.sarah.avatar,
+    status: 'offline',
+    lastMessage: '[语音消息] 12"',
+    time: '昨天',
+    unread: 0,
+    messages: [
+      { id: 'sm1', senderId: 'u3', text: '设计图发给你了。', time: '昨天', type: 'text' },
+    ]
+  }
+];
+
+// --- Components ---
 
 export default function ChatInterface({ username, ws, onLogout, onOpenSettings }) {
   const [activeTab, setActiveTab] = useState('chats');
-  const [selectedChatId, setSelectedChatId] = useState('global');
+  const [selectedChatId, setSelectedChatId] = useState('c1');
   const [inputText, setInputText] = useState('');
-  const [messages, setMessages] = useState([]);
+  const [conversations, setConversations] = useState(INITIAL_CONVERSATIONS);
+  
+  // Call State: 'idle', 'calling', 'connected'
+  const [callState, setCallState] = useState('idle'); 
+  const [callType, setCallType] = useState('video'); // 'video' or 'voice'
+
   const messagesEndRef = useRef(null);
+  const selectedChat = conversations.find(c => c.id === selectedChatId);
 
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [selectedChat?.messages]);
 
-  // WebSocket Message Handling
+  // WebSocket Message Handling (Basic Integration)
   useEffect(() => {
     if (!ws) return;
 
@@ -23,14 +103,60 @@ export default function ChatInterface({ username, ws, onLogout, onOpenSettings }
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'message') {
-           setMessages(prev => [...prev, {
-             id: Date.now(),
-             senderId: msg.username === username ? 'me' : 'other',
-             senderName: msg.username,
-             text: msg.content,
-             time: new Date().toLocaleTimeString(),
-             type: 'text'
-           }]);
+           const sender = msg.username;
+           if (sender === username) return; // Ignore own messages if echoed (though server doesn't echo 'message' type)
+
+           setConversations(prev => {
+             // Check if conversation exists
+             const conversationExists = prev.some(c => 
+               (msg.room_id && c.id === msg.room_id) || 
+               (!msg.room_id && (c.name === sender || c.id === sender))
+             );
+
+             if (conversationExists) {
+               return prev.map(c => {
+                 const match = (msg.room_id && c.id === msg.room_id) || 
+                               (!msg.room_id && (c.name === sender || c.id === sender));
+                 
+                 if (match) {
+                   return {
+                     ...c,
+                     messages: [...c.messages, {
+                        id: Date.now().toString(),
+                        senderId: sender, 
+                        text: msg.content,
+                        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        type: 'text'
+                     }],
+                     lastMessage: msg.content,
+                     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                     unread: c.id === selectedChatId ? 0 : (c.unread || 0) + 1
+                   };
+                 }
+                 return c;
+               });
+             } else {
+               // Create new conversation for new sender
+               const newChat = {
+                 id: sender, // Use username as ID for simplicity
+                 type: msg.room_id ? 'group' : 'p2p',
+                 name: sender,
+                 avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${sender}`,
+                 status: 'online',
+                 lastMessage: msg.content,
+                 time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                 unread: 1,
+                 messages: [{
+                    id: Date.now().toString(),
+                    senderId: sender,
+                    text: msg.content,
+                    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    type: 'text'
+                 }]
+               };
+               return [newChat, ...prev];
+             }
+           });
         }
       } catch (e) {
         console.error("Failed to parse message", e);
@@ -39,200 +165,477 @@ export default function ChatInterface({ username, ws, onLogout, onOpenSettings }
 
     ws.addEventListener('message', handleMessage);
     return () => ws.removeEventListener('message', handleMessage);
-  }, [ws, username]);
+  }, [ws, username, selectedChatId]);
+
+  // Fetch Users
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const res = await fetch('/users');
+        const data = await res.json();
+        if (data.success) {
+           setConversations(prev => {
+             const newConvs = [...prev];
+             data.users.forEach(u => {
+               if (u.username !== username && !newConvs.find(c => c.id === u.username)) {
+                 newConvs.push({
+                   id: u.username,
+                   type: 'p2p',
+                   name: u.username,
+                   avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${u.username}`,
+                   status: 'online',
+                   lastMessage: '',
+                   time: '',
+                   unread: 0,
+                   messages: []
+                 });
+               }
+             });
+             return newConvs;
+           });
+        }
+      } catch (e) {
+        console.error("Failed to fetch users", e);
+      }
+    };
+    
+    if (username) {
+        fetchUsers();
+    }
+  }, [username]);
+
+  // Fetch Message History when Chat Selected
+  useEffect(() => {
+    if (!selectedChatId) return;
+    const chat = conversations.find(c => c.id === selectedChatId);
+    if (!chat || chat.type !== 'p2p') return; // Only p2p supported for now via simple API
+
+    const fetchHistory = async () => {
+        try {
+            const res = await fetch(`/messages?username=${chat.id}`);
+            const data = await res.json();
+            if (data.success && data.messages.length > 0) {
+                setConversations(prev => prev.map(c => {
+                    if (c.id === chat.id) {
+                        // Merge messages. Ideally we should merge with existing, but for simplicity we replace or append unique
+                        // Here we just map backend messages to frontend format
+                        const historyMessages = data.messages.map((m, idx) => ({
+                            id: `hist_${m.timestamp}_${idx}`,
+                            senderId: m.username,
+                            text: m.content,
+                            time: m.timestamp.split(' ')[1]?.substring(0, 5) || '',
+                            type: 'text'
+                        }));
+                        
+                        // If we have local messages that are not in history (e.g. just sent), we should keep them?
+                        // For this demo, let's just use history if it exists, or maybe append local ones?
+                        // Simplest: just use history + keep any that are newer?
+                        // Let's just set messages to history for now to ensure consistency
+                        return {
+                            ...c,
+                            messages: historyMessages,
+                            lastMessage: historyMessages.length > 0 ? historyMessages[historyMessages.length-1].text : c.lastMessage
+                        };
+                    }
+                    return c;
+                }));
+            }
+        } catch (e) {
+            console.error("Failed to fetch history", e);
+        }
+    };
+    
+    fetchHistory();
+  }, [selectedChatId]);
+
 
   const handleSendMessage = (e) => {
     e.preventDefault();
-    if (!inputText.trim() || !ws) return;
+    if (!inputText.trim()) return;
 
-    const payload = {
-      type: 'message',
-      content: inputText,
-      // Default to global/public room for now
-      room_id: selectedChatId === 'global' ? '' : selectedChatId
+    const newMessage = {
+      id: Date.now().toString(),
+      senderId: 'u1', // Me
+      text: inputText,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      type: 'text'
     };
 
-    ws.send(JSON.stringify(payload));
+    // Update local state
+    const updatedConversations = conversations.map(c => {
+      if (c.id === selectedChatId) {
+        return {
+          ...c,
+          messages: [...c.messages, newMessage],
+          lastMessage: inputText,
+          time: newMessage.time
+        };
+      }
+      return c;
+    });
 
-    // Optimistic update
-    setMessages(prev => [...prev, {
-      id: Date.now(),
-      senderId: 'me',
-      senderName: 'Me',
-      text: inputText,
-      time: new Date().toLocaleTimeString(),
-      type: 'text'
-    }]);
-
+    setConversations(updatedConversations);
     setInputText('');
+
+    // Send via WebSocket if available
+    if (ws) {
+        ws.send(JSON.stringify({
+            type: 'message',
+            content: inputText,
+            room_id: selectedChatId
+        }));
+    }
+  };
+
+  const startCall = (type) => {
+    setCallType(type);
+    setCallState('calling');
+    setTimeout(() => {
+      setCallState('connected');
+    }, 1500); // Simulate connecting delay
+  };
+
+  const endCall = () => {
+    setCallState('idle');
+  };
+
+  // --- Render Helpers ---
+  
+  const getAvatar = (chat) => {
+    if (chat.type === 'p2p') {
+      return <img src={chat.avatar} alt={chat.name} className="w-10 h-10 rounded-full bg-gray-600" />;
+    } else {
+      return (
+        <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-white">
+          <Users size={20} />
+        </div>
+      );
+    }
   };
 
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-100 font-sans overflow-hidden">
-      {/* --- Sidebar --- */}
-      <div className="w-80 bg-slate-900 border-r border-slate-800 flex flex-col">
-        {/* Header */}
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-900/20">
-              <MessageSquare size={20} className="text-white" />
-            </div>
-            <div>
-              <h1 className="font-bold text-lg">ChatRoom</h1>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span className="text-xs text-slate-400">Online</span>
-              </div>
-            </div>
-          </div>
-          <button onClick={onOpenSettings} className="p-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-400 hover:text-white">
-            <Settings size={20} />
-          </button>
+    <div className="flex h-screen bg-slate-900 text-slate-100 font-sans overflow-hidden">
+      
+      {/* --- Sidebar Navigation --- */}
+      <div className="w-20 bg-slate-950 flex flex-col items-center py-6 border-r border-slate-800">
+        <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center mb-8 shadow-lg shadow-blue-900/50 cursor-pointer hover:bg-blue-500 transition">
+          <MessageSquare size={24} className="text-white" />
+        </div>
+        
+        <div className="flex flex-col gap-6 w-full">
+          <NavIcon icon={<MessageSquare />} active={activeTab === 'chats'} onClick={() => setActiveTab('chats')} />
+          <NavIcon icon={<Users />} active={activeTab === 'contacts'} onClick={() => setActiveTab('contacts')} />
+          <NavIcon icon={<Phone />} active={activeTab === 'calls'} onClick={() => setActiveTab('calls')} />
         </div>
 
-        {/* Search */}
-        <div className="p-4">
+        <div className="mt-auto mb-4">
+          <NavIcon icon={<Settings />} active={false} onClick={onOpenSettings} />
+          <div className="mt-4 w-10 h-10 rounded-full overflow-hidden border-2 border-slate-700 cursor-pointer">
+            <img src={USERS.me.avatar} alt="Me" />
+          </div>
+        </div>
+      </div>
+
+      {/* --- Chat List Panel --- */}
+      <div className="w-80 bg-slate-900 flex flex-col border-r border-slate-800 hidden md:flex">
+        <div className="p-5">
+          <h1 className="text-2xl font-bold mb-4">消息</h1>
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
+            <Search className="absolute left-3 top-3 text-slate-500" size={18} />
             <input 
               type="text" 
-              placeholder="Search..." 
-              className="w-full bg-slate-800 text-slate-200 pl-10 pr-4 py-2.5 rounded-xl border border-slate-700 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-slate-500"
+              placeholder="搜索聊天或群组..." 
+              className="w-full bg-slate-800 text-sm text-slate-200 pl-10 pr-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 transition"
             />
           </div>
         </div>
 
-        {/* Chat List */}
-        <div className="flex-1 overflow-y-auto px-2 space-y-1 custom-scrollbar">
-          <button
-            onClick={() => setSelectedChatId('global')}
-            className={`w-full p-3 flex items-center gap-3 rounded-xl transition-all ${
-              selectedChatId === 'global' ? 'bg-blue-600/10 border border-blue-600/20' : 'hover:bg-slate-800 border border-transparent'
-            }`}
-          >
-            <div className="relative">
-               <div className="w-12 h-12 rounded-full bg-slate-700 flex items-center justify-center">
-                 <Users size={24} />
-               </div>
-            </div>
-            <div className="flex-1 text-left min-w-0">
-              <div className="flex items-center justify-between mb-0.5">
-                <span className={`font-medium truncate ${selectedChatId === 'global' ? 'text-blue-400' : 'text-slate-200'}`}>
-                  Global Chat
-                </span>
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <div className="px-3 pb-2">
+            <div className="text-xs font-semibold text-slate-500 mb-2 px-2 uppercase tracking-wider">最近聊天</div>
+            {conversations.map(chat => (
+              <div 
+                key={chat.id}
+                onClick={() => setSelectedChatId(chat.id)}
+                className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition mb-1 ${
+                  selectedChatId === chat.id ? 'bg-slate-800' : 'hover:bg-slate-800/50'
+                }`}
+              >
+                <div className="relative">
+                  {getAvatar(chat)}
+                  {chat.type === 'p2p' && chat.status === 'online' && (
+                    <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-slate-900"></div>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-baseline mb-0.5">
+                    <h3 className="font-semibold text-slate-200 truncate">{chat.name}</h3>
+                    <span className="text-xs text-slate-500">{chat.time}</span>
+                  </div>
+                  <p className="text-sm text-slate-400 truncate">{chat.lastMessage}</p>
+                </div>
+                {chat.unread > 0 && (
+                  <div className="w-5 h-5 bg-blue-600 rounded-full flex items-center justify-center text-[10px] font-bold">
+                    {chat.unread}
+                  </div>
+                )}
               </div>
-              <p className="text-sm text-slate-500 truncate">Public room</p>
-            </div>
-          </button>
-        </div>
-        
-        {/* User Info */}
-        <div className="p-4 border-t border-slate-800 bg-slate-900/50">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center">
-               <span className="font-bold">{username[0]?.toUpperCase()}</span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <h3 className="font-medium text-sm truncate">{username}</h3>
-              <p className="text-xs text-slate-500">Online</p>
-            </div>
-            <button onClick={onLogout} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-red-400 transition-colors">
-              <X size={18} />
-            </button>
+            ))}
           </div>
         </div>
       </div>
 
       {/* --- Main Chat Area --- */}
-      <div className="flex-1 flex flex-col min-w-0 bg-slate-950/50">
-        {/* Chat Header */}
-        <div className="h-18 border-b border-slate-800 p-4 flex items-center justify-between backdrop-blur-md bg-slate-950/80 sticky top-0 z-10">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center">
-              <Users size={20} className="text-slate-400" />
-            </div>
-            <div>
-              <h2 className="font-bold text-lg">Global Chat</h2>
-              <p className="text-xs text-slate-400">Everyone is here</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button className="p-2.5 hover:bg-slate-800 rounded-xl text-slate-400 hover:text-blue-400 transition-colors">
-              <Phone size={20} />
-            </button>
-            <button className="p-2.5 hover:bg-slate-800 rounded-xl text-slate-400 hover:text-blue-400 transition-colors">
-              <Video size={20} />
-            </button>
-            <div className="w-px h-6 bg-slate-800 mx-1"></div>
-            <button className="p-2.5 hover:bg-slate-800 rounded-xl text-slate-400 hover:text-white transition-colors">
-              <MoreVertical size={20} />
-            </button>
-          </div>
-        </div>
-
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
-          {messages.map((msg, index) => (
-            <div 
-              key={index} 
-              className={`flex gap-3 max-w-[80%] ${msg.senderId === 'me' ? 'ml-auto flex-row-reverse' : ''}`}
-            >
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                msg.senderId === 'me' ? 'bg-blue-600' : 'bg-slate-700'
-              }`}>
-                <span className="text-xs font-bold text-white">
-                  {msg.senderName?.[0]?.toUpperCase() || '?'}
-                </span>
+      <div className="flex-1 flex flex-col relative bg-slate-925">
+        {selectedChat ? (
+          <>
+            {/* Header */}
+            <div className="h-20 border-b border-slate-800 flex items-center justify-between px-6 bg-slate-900/95 backdrop-blur">
+              <div className="flex items-center gap-4">
+                {getAvatar(selectedChat)}
+                <div>
+                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                    {selectedChat.name}
+                    {selectedChat.type === 'group' && <span className="px-2 py-0.5 rounded bg-slate-800 text-xs text-slate-400 font-normal">群组</span>}
+                  </h2>
+                  <p className="text-sm text-slate-400">
+                    {selectedChat.type === 'p2p' 
+                      ? (selectedChat.status === 'online' ? '在线' : '离线') 
+                      : selectedChat.status}
+                  </p>
+                </div>
               </div>
               
-              <div className={`space-y-1 ${msg.senderId === 'me' ? 'items-end' : 'items-start'} flex flex-col`}>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-xs text-slate-400 font-medium">{msg.senderName}</span>
-                  <span className="text-[10px] text-slate-600">{msg.time}</span>
-                </div>
-                <div className={`p-3 rounded-2xl text-sm leading-relaxed shadow-sm ${
-                  msg.senderId === 'me' 
-                  ? 'bg-blue-600 text-white rounded-tr-none' 
-                  : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700'
-                }`}>
-                  {msg.text}
-                </div>
+              <div className="flex items-center gap-2">
+                <IconButton icon={<Phone size={20} />} onClick={() => startCall('voice')} />
+                <IconButton icon={<Video size={20} />} onClick={() => startCall('video')} />
+                <div className="w-px h-6 bg-slate-700 mx-2"></div>
+                <IconButton icon={<MoreVertical size={20} />} />
               </div>
             </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
 
-        {/* Input Area */}
-        <div className="p-4 border-t border-slate-800 bg-slate-900/30">
-          <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto relative flex items-center gap-2 bg-slate-900 p-2 rounded-2xl border border-slate-800 focus-within:border-blue-500/50 focus-within:ring-2 focus-within:ring-blue-500/10 transition-all shadow-lg">
-            <button type="button" className="p-2.5 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-xl transition-all">
-              <Smile size={20} />
-            </button>
-            <button type="button" className="p-2.5 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-xl transition-all">
-              <ImageIcon size={20} />
-            </button>
-            
-            <input 
-              type="text" 
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              placeholder="Type a message..." 
-              className="flex-1 bg-transparent border-none focus:ring-0 text-slate-200 placeholder:text-slate-500 h-10 px-2"
-            />
-            
-            {inputText.trim() ? (
-              <button type="submit" className="p-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl transition-all shadow-lg shadow-blue-600/20">
-                <Send size={18} />
-              </button>
-            ) : (
-              <button type="button" className="p-2.5 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-xl transition-all">
-                <Mic size={20} />
-              </button>
-            )}
-          </form>
-        </div>
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-blend-overlay">
+              {selectedChat.messages.map((msg, idx) => {
+                const isMe = msg.senderId === 'u1';
+                const showAvatar = !isMe && (idx === 0 || selectedChat.messages[idx-1].senderId !== msg.senderId);
+                
+                return (
+                  <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'} group`}>
+                    {!isMe && (
+                      <div className="w-8 mr-2 flex-shrink-0">
+                        {showAvatar && (
+                          <img 
+                            src={USERS[Object.keys(USERS).find(key => USERS[key].id === msg.senderId)]?.avatar || USERS.alex.avatar} 
+                            className="w-8 h-8 rounded-full" 
+                            alt="sender"
+                          />
+                        )}
+                      </div>
+                    )}
+                    
+                    <div className={`max-w-[70%] ${isMe ? 'items-end' : 'items-start'} flex flex-col`}>
+                      {!isMe && showAvatar && selectedChat.type === 'group' && (
+                        <span className="text-xs text-slate-400 mb-1 ml-1">
+                          {USERS[Object.keys(USERS).find(key => USERS[key].id === msg.senderId)]?.name || msg.senderId}
+                        </span>
+                      )}
+                      
+                      <div className={`
+                        px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm
+                        ${isMe 
+                          ? 'bg-blue-600 text-white rounded-tr-none' 
+                          : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700'}
+                      `}>
+                        {msg.text}
+                      </div>
+                      <span className={`text-[10px] text-slate-500 mt-1 ${isMe ? 'mr-1' : 'ml-1'} opacity-0 group-hover:opacity-100 transition`}>
+                        {msg.time}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} className="h-4"></div>
+            </div>
+
+            {/* Input Area */}
+            <div className="p-4 bg-slate-900 border-t border-slate-800">
+              <form onSubmit={handleSendMessage} className="flex items-end gap-3 max-w-5xl mx-auto">
+                <button type="button" className="p-3 text-slate-400 hover:text-blue-500 hover:bg-slate-800 rounded-full transition">
+                  <ImageIcon size={22} />
+                </button>
+                <div className="flex-1 bg-slate-800 rounded-2xl flex items-center p-1 border border-transparent focus-within:border-blue-600/50 transition">
+                  <input 
+                    type="text" 
+                    value={inputText}
+                    onChange={(e) => setInputText(e.target.value)}
+                    placeholder="输入消息..." 
+                    className="flex-1 bg-transparent px-4 py-2.5 focus:outline-none text-slate-200 placeholder-slate-500"
+                  />
+                  <button type="button" className="p-2 text-slate-400 hover:text-slate-200 rounded-full transition mx-1">
+                    <Smile size={20} />
+                  </button>
+                </div>
+                {inputText.trim() ? (
+                  <button type="submit" className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-500 shadow-lg shadow-blue-900/30 transition transform hover:scale-105">
+                    <Send size={20} />
+                  </button>
+                ) : (
+                  <button type="button" className="p-3 text-slate-400 hover:text-red-500 hover:bg-slate-800 rounded-full transition">
+                    <Mic size={22} />
+                  </button>
+                )}
+              </form>
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
+            <MessageSquare size={64} className="mb-4 opacity-20" />
+            <p>选择一个聊天开始对话</p>
+          </div>
+        )}
       </div>
+
+      {/* --- Right Sidebar (Details) --- */}
+      {selectedChat && (
+        <div className="w-72 bg-slate-950 border-l border-slate-800 hidden xl:flex flex-col p-6">
+          <div className="flex flex-col items-center mb-8">
+             <div className="w-24 h-24 mb-4 relative">
+                {selectedChat.type === 'p2p' ? (
+                   <img src={selectedChat.avatar} className="w-full h-full rounded-full object-cover ring-4 ring-slate-800" alt="" />
+                ) : (
+                  <div className="w-full h-full rounded-full bg-indigo-600 flex items-center justify-center text-white ring-4 ring-slate-800">
+                    <Users size={40} />
+                  </div>
+                )}
+                <div className={`absolute bottom-1 right-1 w-5 h-5 rounded-full border-4 border-slate-950 ${selectedChat.status === 'online' ? 'bg-green-500' : 'bg-slate-500'}`}></div>
+             </div>
+             <h2 className="text-xl font-bold text-white mb-1">{selectedChat.name}</h2>
+             <p className="text-sm text-slate-400 mb-4">{selectedChat.type === 'p2p' ? '@username' : '群组公告'}</p>
+             
+             <div className="flex gap-4">
+                <ActionIcon icon={<Phone size={18} />} label="语音" onClick={() => startCall('voice')} />
+                <ActionIcon icon={<Video size={18} />} label="视频" onClick={() => startCall('video')} />
+                <ActionIcon icon={<Search size={18} />} label="搜索" />
+             </div>
+          </div>
+
+          <div className="space-y-4">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">共享媒体</h3>
+            <div className="grid grid-cols-3 gap-2">
+               {[1,2,3,4,5,6].map(i => (
+                 <div key={i} className="aspect-square bg-slate-800 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-700 transition cursor-pointer">
+                    <ImageIcon size={16} />
+                 </div>
+               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Video/Voice Call Overlay Modal --- */}
+      {callState !== 'idle' && (
+        <div className="absolute inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-300">
+          
+          <div className="relative w-full max-w-4xl aspect-video bg-slate-900 rounded-2xl overflow-hidden shadow-2xl border border-slate-800">
+             {/* Main Video Feed (Remote) */}
+             <div className="absolute inset-0 flex items-center justify-center bg-slate-800">
+                {callType === 'video' ? (
+                  <div className="text-center">
+                    {callState === 'calling' ? (
+                      <div className="flex flex-col items-center animate-pulse">
+                        <img src={selectedChat.avatar || ''} className="w-24 h-24 rounded-full mb-4" />
+                        <h3 className="text-2xl font-bold text-white">正在呼叫 {selectedChat.name}...</h3>
+                      </div>
+                    ) : (
+                      // Mock Video Content
+                      <div className="w-full h-full relative">
+                        <div className="absolute inset-0 bg-gradient-to-b from-transparent to-slate-900/50"></div>
+                        <img src="https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=1000" className="w-full h-full object-cover opacity-80" alt="Video Feed" />
+                        <div className="absolute bottom-6 left-6 text-white drop-shadow-md">
+                          <h3 className="text-xl font-bold">{selectedChat.name}</h3>
+                          <span className="text-sm bg-green-500/20 text-green-400 px-2 py-0.5 rounded border border-green-500/30">高清 1080p</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  // Voice Call UI
+                  <div className="flex flex-col items-center">
+                    <div className="w-32 h-32 rounded-full border-4 border-slate-700 p-1 mb-6 animate-pulse">
+                      <img src={selectedChat.avatar} className="w-full h-full rounded-full object-cover" />
+                    </div>
+                    <h2 className="text-3xl font-bold text-white mb-2">{selectedChat.name}</h2>
+                    <p className="text-blue-400">{callState === 'calling' ? '正在连接...' : '通话中 00:45'}</p>
+                  </div>
+                )}
+             </div>
+
+             {/* Self View (Picture in Picture) */}
+             {callType === 'video' && callState === 'connected' && (
+               <div className="absolute top-4 right-4 w-48 aspect-video bg-slate-700 rounded-lg border-2 border-slate-600 shadow-xl overflow-hidden">
+                 <img src={USERS.me.avatar} className="w-full h-full object-cover opacity-90" />
+               </div>
+             )}
+
+             {/* Controls */}
+             <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4 px-6 py-3 bg-slate-900/80 backdrop-blur rounded-full border border-slate-700">
+                <ControlBtn icon={<MicOff />} active={false} />
+                <ControlBtn icon={<VideoOff />} active={callType !== 'video'} disabled={callType !== 'video'} />
+                <ControlBtn icon={<Monitor />} active={false} />
+                <div className="w-px h-8 bg-slate-700 mx-2"></div>
+                <button 
+                  onClick={endCall}
+                  className="w-14 h-14 bg-red-600 hover:bg-red-500 rounded-full flex items-center justify-center text-white shadow-lg transition transform hover:scale-110"
+                >
+                  <PhoneOff size={24} />
+                </button>
+             </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
+
+// --- Sub Components ---
+
+const NavIcon = ({ icon, active, onClick }) => (
+  <button 
+    onClick={onClick}
+    className={`w-full flex justify-center py-1 transition relative group ${active ? 'text-blue-500' : 'text-slate-500 hover:text-slate-300'}`}
+  >
+    <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-blue-600 rounded-r-lg transition-all duration-300 ${active ? 'opacity-100' : 'opacity-0'}`}></div>
+    {React.cloneElement(icon, { size: 28 })}
+  </button>
+);
+
+const IconButton = ({ icon, onClick }) => (
+  <button onClick={onClick} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition">
+    {icon}
+  </button>
+);
+
+const ActionIcon = ({ icon, label, onClick }) => (
+  <button onClick={onClick} className="flex flex-col items-center gap-2 group">
+    <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 group-hover:bg-slate-700 group-hover:text-white transition">
+      {icon}
+    </div>
+    <span className="text-xs text-slate-500 group-hover:text-slate-400 transition">{label}</span>
+  </button>
+);
+
+const ControlBtn = ({ icon, active, disabled }) => (
+  <button 
+    disabled={disabled}
+    className={`p-4 rounded-full transition ${
+      active 
+      ? 'bg-white text-slate-900' 
+      : 'bg-slate-800 text-white hover:bg-slate-700'
+    } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+  >
+    {React.cloneElement(icon, { size: 24 })}
+  </button>
+);

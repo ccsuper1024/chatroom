@@ -8,7 +8,7 @@ function App() {
   const [view, setView] = useState('login'); // login, chat, settings
   const [ws, setWs] = useState(null);
 
-  const handleLogin = (username) => {
+  const handleLogin = (username, password) => {
     // 1. WebSocket Connect
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host || 'localhost:8080';
@@ -27,7 +27,9 @@ function App() {
       // Send Login Message
       socket.send(JSON.stringify({
         type: 'login',
-        username: username
+        username: username,
+        password: password,
+        client_type: 'web'
       }));
     };
 

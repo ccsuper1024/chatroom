@@ -24,6 +24,7 @@ struct UserSession {
     std::string username;           ///< 用户名
     std::string connection_id;      ///< 唯一连接标识
     std::string client_version;     ///< 客户端版本号
+    std::string client_type;        ///< 客户端类型 (web/cli/mobile)
     std::chrono::system_clock::time_point last_heartbeat; ///< 最后心跳时间
     std::chrono::system_clock::time_point login_time;     ///< 登录时间
 };
@@ -66,9 +67,10 @@ public:
     /**
      * @brief 用户登录
      * @param username 用户名
+     * @param client_type 客户端类型
      * @return LoginResult 登录结果
      */
-    LoginResult login(const std::string& username);
+    LoginResult login(const std::string& username, const std::string& client_type = "unknown");
     
     // SIP Session Management
     void registerSipSession(const std::string& username, std::shared_ptr<TcpConnection> conn);

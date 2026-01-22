@@ -37,7 +37,7 @@ std::string SessionManager::generateConnectionId() {
     return oss.str();
 }
 
-SessionManager::LoginResult SessionManager::login(const std::string& username) {
+SessionManager::LoginResult SessionManager::login(const std::string& username, const std::string& client_type) {
     std::lock_guard<std::mutex> lock(mutex_);
     
     // Check if username is already taken
@@ -51,6 +51,7 @@ SessionManager::LoginResult SessionManager::login(const std::string& username) {
     UserSession session;
     session.username = username;
     session.connection_id = connection_id;
+    session.client_type = client_type;
     session.last_heartbeat = std::chrono::system_clock::now();
     session.login_time = session.last_heartbeat;
     

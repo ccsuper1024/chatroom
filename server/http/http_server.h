@@ -109,6 +109,13 @@ public:
      */
     std::size_t getThreadPoolActiveThreadCount() const;
 
+    /**
+     * @brief 处理静态文件请求
+     * @param path 文件相对路径
+     * @return HTTP响应
+     */
+    HttpResponse serveStaticFile(const std::string& path);
+
 private:
     void onConnection(const TcpConnectionPtr& conn);
     void onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp receiveTime);
@@ -121,13 +128,6 @@ private:
     
     WebSocketHandler ws_handler_;
     std::string static_resource_dir_;
-    
-    /**
-     * @brief 处理静态文件请求
-     * @param path 文件相对路径
-     * @return HTTP响应
-     */
-    HttpResponse serveStaticFile(const std::string& path);
     
     std::string buildResponse(const HttpResponse& resp);
 };
