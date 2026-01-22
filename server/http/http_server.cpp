@@ -22,12 +22,13 @@
 #include <string_view>
 
 struct HttpConnectionContext {
-    enum Protocol { kHttp, kWebSocket, kRtsp, kSip, kFtp };
+    enum Protocol { kHttp, kWebSocket };
     Protocol protocol = kHttp;
 };
 
 HttpServer::HttpServer(EventLoop* loop, int port) 
     : server_(loop, InetAddress(port), "HttpServer", TcpServer::kReusePort),
+      port_(port),
       thread_pool_(ServerConfig::instance().thread_pool.core_threads,
                    ServerConfig::instance().thread_pool.max_threads,
                    ServerConfig::instance().thread_pool.queue_capacity) {
@@ -55,18 +56,6 @@ void HttpServer::registerHandler(const std::string& path, HttpHandler handler) {
 
 void HttpServer::setWebSocketHandler(WebSocketHandler handler) {
     ws_handler_ = handler;
-}
-
-void HttpServer::setRtspHandler(RtspHandler handler) {
-    rtsp_handler_ = handler;
-}
-
-void HttpServer::setSipHandler(SipHandler handler) {
-    sip_handler_ = handler;
-}
-
-void HttpServer::setFtpHandler(FtpHandler handler) {
-    ftp_handler_ = handler;
 }
 
 void HttpServer::start() {
@@ -112,26 +101,6 @@ void HttpServer::onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp 
 
     while (buf->readableBytes() > 0) {
         if (context->protocol == HttpConnectionContext::kHttp) {
-            // Simple heuristic for RTSP
-            // Check if it looks like RTSP before trying to parse as HTTP
-            // Only check if we are at the start of a message
-            const char* crlf = buf->findCRLF();
-            if (crlf) {
-                 std::string_view firstLine(buf->peek(), crlf - buf->peek());
-                 if (firstLine.find("RTSP/1.0") != std::string_view::npos) {
-                     context->protocol = HttpConnectionContext::kRtsp;
-                     continue;
-                 }
-                 if (firstLine.find("SIP/2.0") != std::string_view::npos) {
-                     context->protocol = HttpConnectionContext::kSip;
-                     continue;
-                 }
-                 if (firstLine.substr(0, 5) == "USER " || firstLine.substr(0, 5) == "user ") {
-                     context->protocol = HttpConnectionContext::kFtp;
-                     continue;
-                 }
-            }
-
             bool complete = false;
             bool bad = false;
             HttpRequest req = parseRequestFromBuffer(buf, complete, bad);
@@ -155,23 +124,6 @@ void HttpServer::onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp 
             int consumed = protocols::WebSocketCodec::parseFrame(reinterpret_cast<uint8_t*>(buf->beginRead()), buf->readableBytes(), frame);
             
             if (consumed > 0) {
-                // Frame parsed successfully. The payload now points to buffer data.
-                // We must handle it BEFORE retrieving, because retrieve advances readerIndex.
-                // However, retrieve() does not overwrite data. 
-                // BUT, if we call handler which might send data, and if buffer is compacted...
-                // Ideally we retrieve AFTER handling?
-                // No, retrieve just moves index. Data is safe until next read from socket.
-                // But let's be safe: pass frame to handler, then retrieve?
-                // If handler modifies buffer (impossible, it's const frame payload view), ok.
-                // But parseFrame return value includes payload length.
-                
-                // CRITICAL: We retrieve FIRST to advance readerIndex, so next iteration sees next frame.
-                // The frame.payload points to the data we just "retrieved".
-                // Since Buffer implementation of retrieve() only adds to readerIndex, the pointer is valid 
-                // until Buffer::ensureWritableBytes moves data (which happens on append).
-                // Since we are in onMessage, we don't append to input buffer.
-                // So it is safe.
-                
                 buf->retrieve(consumed);
                 if (ws_handler_) {
                     ws_handler_(conn, frame);
@@ -181,43 +133,6 @@ void HttpServer::onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp 
                 return;
             } else {
                 break; // Incomplete frame
-            }
-        } else if (context->protocol == HttpConnectionContext::kRtsp) {
-            protocols::RtspRequest rtspReq;
-            size_t consumed = protocols::RtspCodec::parseRequest(buf, rtspReq);
-            
-            if (consumed > 0) {
-                buf->retrieve(consumed);
-                if (rtsp_handler_) {
-                    rtsp_handler_(conn, rtspReq);
-                }
-            } else {
-                break; // Incomplete
-            }
-        } else if (context->protocol == HttpConnectionContext::kSip) {
-            std::string data(buf->peek(), buf->readableBytes());
-            SipRequest sipReq;
-            size_t consumed = SipCodec::parseRequest(data, sipReq);
-            
-            if (consumed > 0) {
-                std::string raw_msg(buf->peek(), consumed);
-                buf->retrieve(consumed);
-                if (sip_handler_) {
-                    sip_handler_(conn, sipReq, raw_msg);
-                }
-            } else {
-                break; // Incomplete
-            }
-        } else if (context->protocol == HttpConnectionContext::kFtp) {
-            const char* crlf = buf->findCRLF();
-            if (crlf) {
-                std::string command(buf->peek(), crlf - buf->peek());
-                buf->retrieve(crlf + 2 - buf->peek());
-                if (ftp_handler_) {
-                    ftp_handler_(conn, command);
-                }
-            } else {
-                break; // Incomplete
             }
         }
     }

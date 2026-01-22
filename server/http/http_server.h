@@ -10,8 +10,6 @@
 #include "http/http_codec.h"
 #include "utils/thread_pool.h"
 #include "websocket/websocket_codec.h"
-#include "rtsp/rtsp_codec.h"
-#include "sip/sip_codec.h"
 
 class TcpConnection;
 
@@ -26,25 +24,10 @@ using HttpHandler = std::function<HttpResponse(const HttpRequest&)>;
 using WebSocketHandler = std::function<void(const TcpConnectionPtr&, const protocols::WebSocketFrame&)>;
 
 /**
- * @brief RTSP请求处理函数类型
- */
-using RtspHandler = std::function<void(const TcpConnectionPtr&, const protocols::RtspRequest&)>;
-
-/**
- * @brief SIP请求处理函数类型
- */
-using SipHandler = std::function<void(const TcpConnectionPtr&, const SipRequest&, const std::string&)>;
-
-/**
- * @brief FTP命令处理函数类型
- */
-using FtpHandler = std::function<void(const TcpConnectionPtr&, const std::string&)>;
-
-/**
  * @brief HTTP服务器核心类
  * 
  * 负责监听端口、接受连接、分发请求到对应的处理器。
- * 支持HTTP、WebSocket和RTSP协议的混合处理。
+ * 支持HTTP和WebSocket协议。
  */
 class HttpServer {
 public:
@@ -77,24 +60,6 @@ public:
     void setWebSocketHandler(WebSocketHandler handler);
     
     /**
-     * @brief 设置RTSP请求处理器
-     * @param handler 处理函数
-     */
-    void setRtspHandler(RtspHandler handler);
-
-    /**
-     * @brief 设置SIP请求处理器
-     * @param handler 处理函数
-     */
-    void setSipHandler(SipHandler handler);
-
-    /**
-     * @brief 设置FTP命令处理器
-     * @param handler 处理函数
-     */
-    void setFtpHandler(FtpHandler handler);
-
-    /**
      * @brief 启动服务器
      * 
      * 初始化Acceptor并进入事件循环（阻塞）。
@@ -103,10 +68,13 @@ public:
     
     /**
      * @brief 停止服务器
-     * 
-     * 退出事件循环并关闭所有连接。
      */
     void stop();
+
+    /**
+     * @brief 获取监听端口
+     */
+    int port() const { return port_; }
     
     EventLoop* getLoop() const { return server_.getLoop(); }
 
@@ -135,19 +103,16 @@ public:
      */
     std::size_t getThreadPoolActiveThreadCount() const;
 
-    // Changed to public for testing
+private:
     void onConnection(const TcpConnectionPtr& conn);
     void onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp receiveTime);
-
-private:
     void onRequest(const TcpConnectionPtr& conn, const HttpRequest& req);
 
     TcpServer server_;
+    int port_;
     std::map<std::string, HttpHandler> handlers_;
-    WebSocketHandler ws_handler_;
-    RtspHandler rtsp_handler_;
-    SipHandler sip_handler_;
-    FtpHandler ftp_handler_;
     ThreadPool thread_pool_;
+    
+    WebSocketHandler ws_handler_;
 };
 

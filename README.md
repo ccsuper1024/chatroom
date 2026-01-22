@@ -29,32 +29,30 @@ chatroom/
 ├── deploy_client.sh        # 客户端部署脚本 ⭐
 │
 ├── server/                 # 服务器代码目录
-│   ├── CMakeLists.txt      # 服务器CMake配置
-│   ├── include/            # 服务器头文件
-│   │   ├── http_server.h
-│   │   ├── chatroom_server.h
-│   │   └── json_utils.h
-│   ├── src/                # 服务器源代码
-│   │   ├── http_server.cpp
-│   │   ├── chatroom_server.cpp
-│   │   └── server_main.cpp
+│   ├── chatroom/           # 聊天室业务逻辑
+│   │   ├── chat_service.cpp/h
+│   │   ├── chatroom_server.cpp/h
+│   │   └── session_manager.cpp/h
+│   ├── http/               # HTTP协议处理
+│   │   └── http_server.cpp/h
+│   ├── net/                # 网络核心库 (TcpServer, EventLoop等)
+│   ├── rtsp/               # RTSP协议支持
+│   ├── sip/                # SIP协议支持
+│   ├── websocket/          # WebSocket协议支持
+│   ├── utils/              # 通用工具类 (Logger, Config, Json等)
 │   └── tests/              # 服务器测试代码
-│       └── chatroom_test.cpp
 │
 ├── client/                 # 客户端代码目录
 │   ├── CMakeLists.txt      # 客户端CMake配置
 │   ├── include/            # 客户端头文件
-│   │   └── chatroom_client.h
 │   └── src/                # 客户端源代码
-│       ├── chatroom_client.cpp
-│       └── client_main.cpp
+│
+├── third_party/            # 第三方依赖库 (已包含)
+│   ├── spdlog/
+│   ├── json/
+│   └── googletest/
 │
 └── build/                  # 编译输出目录
-    ├── server/
-    │   ├── chatroom_server # 服务器程序
-    │   └── chatroom_test   # 测试程序
-    └── client/
-        └── chatroom_client # 客户端程序
 ```
 
 ## 依赖库
@@ -63,18 +61,7 @@ chatroom/
 - [nlohmann/json](https://github.com/nlohmann/json) - JSON解析库
 - [googletest](https://github.com/google/googletest) - 测试框架
 
-所有依赖库需要在编译前手动下载到 `third_party` 目录。
-
-> ⚠️ **重要提示**：由于 `third_party/` 目录被 `.gitignore` 忽略，拉取代码后必须手动下载以下依赖库的源码，并放置在正确的位置，否则无法编译。
-
-请确保项目根目录下的 `third_party` 目录结构如下：
-
-```text
-third_party/
-├── spdlog/      # git clone https://github.com/gabime/spdlog.git
-├── json/        # git clone https://github.com/nlohmann/json.git
-└── googletest/  # git clone https://github.com/google/googletest.git
-```
+所有依赖库已包含在 `third_party` 目录中，直接编译即可。
 
 ## 编译
 

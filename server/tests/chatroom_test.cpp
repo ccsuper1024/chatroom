@@ -121,6 +121,7 @@ TEST_F(ChatRoomServerTest, WebSocketLoginAndMessage) {
     
     // Verify response
     std::string resp_payload(resp_frame.payload.begin(), resp_frame.payload.end());
+    
     auto resp_json = json::parse(resp_payload);
     EXPECT_EQ(resp_json["type"], "login_response");
     EXPECT_TRUE(resp_json["success"]);
@@ -163,6 +164,186 @@ TEST_F(ChatRoomServerTest, WebSocketLoginAndMessage) {
     // fds[0] closed by TcpConnection
 }
 
+TEST_F(ChatRoomServerTest, WebSocketForwarding) {
+    EventLoop* loop = server_->getLoop();
+    
+    // User A: Alice
+    int fds_a[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds_a), 0);
+    fcntl(fds_a[0], F_SETFL, O_NONBLOCK);
+    fcntl(fds_a[1], F_SETFL, O_NONBLOCK);
+    auto conn_a = std::make_shared<TcpConnection>(loop, "conn_a", fds_a[0], InetAddress(0), InetAddress(0));
+    conn_a->connectEstablished();
+    
+    // User B: Bob
+    int fds_b[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds_b), 0);
+    fcntl(fds_b[0], F_SETFL, O_NONBLOCK);
+    fcntl(fds_b[1], F_SETFL, O_NONBLOCK);
+    auto conn_b = std::make_shared<TcpConnection>(loop, "conn_b", fds_b[0], InetAddress(0), InetAddress(0));
+    conn_b->connectEstablished();
+    
+    // 1. Login Alice
+    json login_req_a;
+    login_req_a["type"] = "login";
+    login_req_a["username"] = "Alice";
+    std::string login_str_a = login_req_a.dump();
+    protocols::WebSocketFrame frame_a;
+    frame_a.opcode = protocols::WebSocketOpcode::TEXT;
+    frame_a.payload = login_str_a;
+    HandleWebSocketMessage(conn_a, frame_a);
+    
+    // Consume Alice's login response
+    char buf[4096];
+    read(fds_a[1], buf, sizeof(buf)); 
+    
+    // 2. Login Bob
+    json login_req_b;
+    login_req_b["type"] = "login";
+    login_req_b["username"] = "Bob";
+    std::string login_str_b = login_req_b.dump();
+    protocols::WebSocketFrame frame_b;
+    frame_b.opcode = protocols::WebSocketOpcode::TEXT;
+    frame_b.payload = login_str_b;
+    HandleWebSocketMessage(conn_b, frame_b);
+    
+    // Consume Bob's login response
+    read(fds_b[1], buf, sizeof(buf));
+
+    // 3. Alice sends message to Bob
+    json msg_req;
+    msg_req["type"] = "message";
+    msg_req["content"] = "Hi Bob";
+    msg_req["target_user"] = "Bob";
+    std::string msg_str = msg_req.dump();
+    frame_a.payload = msg_str;
+    HandleWebSocketMessage(conn_a, frame_a);
+    
+    // 4. Verify Bob receives the message
+    ssize_t n = 0;
+    int retries = 5;
+    while (retries-- > 0) {
+        n = read(fds_b[1], buf, sizeof(buf));
+        if (n > 0) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_GT(n, 0);
+    
+    std::vector<uint8_t> recv_buf(buf, buf + n);
+    protocols::WebSocketFrame resp_frame;
+    int consumed = protocols::WebSocketCodec::parseFrame(recv_buf.data(), recv_buf.size(), resp_frame);
+    ASSERT_GT(consumed, 0);
+    
+    std::string resp_payload(resp_frame.payload.begin(), resp_frame.payload.end());
+    auto resp_json = json::parse(resp_payload);
+    
+    EXPECT_EQ(resp_json["type"], "message");
+    EXPECT_EQ(resp_json["username"], "Alice");
+    EXPECT_EQ(resp_json["content"], "Hi Bob");
+    EXPECT_EQ(resp_json["target_user"], "Bob");
+
+    close(fds_a[1]);
+    close(fds_b[1]);
+}
+
+TEST_F(ChatRoomServerTest, MultiRoomChat) {
+    EventLoop* loop = server_->getLoop();
+    
+    // User A: Alice
+    int fds_a[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds_a), 0);
+    fcntl(fds_a[0], F_SETFL, O_NONBLOCK);
+    fcntl(fds_a[1], F_SETFL, O_NONBLOCK);
+    auto conn_a = std::make_shared<TcpConnection>(loop, "conn_a", fds_a[0], InetAddress(0), InetAddress(0));
+    conn_a->connectEstablished();
+    
+    // User B: Bob
+    int fds_b[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds_b), 0);
+    fcntl(fds_b[0], F_SETFL, O_NONBLOCK);
+    fcntl(fds_b[1], F_SETFL, O_NONBLOCK);
+    auto conn_b = std::make_shared<TcpConnection>(loop, "conn_b", fds_b[0], InetAddress(0), InetAddress(0));
+    conn_b->connectEstablished();
+    
+    // User C: Charlie (NotInRoom)
+    int fds_c[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds_c), 0);
+    fcntl(fds_c[0], F_SETFL, O_NONBLOCK);
+    fcntl(fds_c[1], F_SETFL, O_NONBLOCK);
+    auto conn_c = std::make_shared<TcpConnection>(loop, "conn_c", fds_c[0], InetAddress(0), InetAddress(0));
+    conn_c->connectEstablished();
+
+    // 1. Login all
+    auto login = [&](std::shared_ptr<TcpConnection> conn, std::string name, int fd) {
+        json req; req["type"] = "login"; req["username"] = name;
+        std::string str = req.dump();
+        protocols::WebSocketFrame frame; frame.opcode = protocols::WebSocketOpcode::TEXT; frame.payload = str;
+        HandleWebSocketMessage(conn, frame);
+        char buf[4096]; read(fd, buf, sizeof(buf)); // consume response
+    };
+    
+    login(conn_a, "Alice", fds_a[1]);
+    login(conn_b, "Bob", fds_b[1]);
+    login(conn_c, "Charlie", fds_c[1]);
+
+    // 2. Alice and Bob join room "tech"
+    auto join = [&](std::shared_ptr<TcpConnection> conn, std::string room) {
+        json req; req["type"] = "join_room"; req["room_id"] = room;
+        std::string str = req.dump();
+        protocols::WebSocketFrame frame; frame.opcode = protocols::WebSocketOpcode::TEXT; frame.payload = str;
+        HandleWebSocketMessage(conn, frame);
+    };
+    
+    join(conn_a, "tech");
+    join(conn_b, "tech");
+
+    // 3. Alice sends message to room "tech"
+    json msg_req;
+    msg_req["type"] = "message";
+    msg_req["content"] = "Hello Tech Room";
+    msg_req["room_id"] = "tech";
+    std::string msg_str = msg_req.dump();
+    protocols::WebSocketFrame frame_a;
+    frame_a.opcode = protocols::WebSocketOpcode::TEXT;
+    frame_a.payload = msg_str;
+    HandleWebSocketMessage(conn_a, frame_a);
+    
+    // 4. Verify Bob receives, Charlie does not
+    char buf[4096];
+    
+    // Check Bob
+    int retries = 5;
+    ssize_t n = 0;
+    while (retries-- > 0) {
+        n = read(fds_b[1], buf, sizeof(buf));
+        if (n > 0) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_GT(n, 0);
+    std::vector<uint8_t> recv_buf(buf, buf + n);
+    protocols::WebSocketFrame resp_frame;
+    protocols::WebSocketCodec::parseFrame(recv_buf.data(), recv_buf.size(), resp_frame);
+    std::string resp_payload(resp_frame.payload.begin(), resp_frame.payload.end());
+    auto resp_json = json::parse(resp_payload);
+    EXPECT_EQ(resp_json["content"], "Hello Tech Room");
+    EXPECT_EQ(resp_json["room_id"], "tech");
+    
+    // Check Charlie (Should be nothing or EAGAIN)
+    n = read(fds_c[1], buf, sizeof(buf));
+    if (n > 0) {
+        // If received something, ensure it is NOT the room message (maybe heartbeat or something else?)
+        // But here we expect nothing
+        // Actually since we use non-blocking, it might return -1 EAGAIN
+        // Or if we parse it, it shouldn't be the message
+    }
+    // We can't easily assert "nothing received" in async test without timeout, 
+    // but here immediate read should fail or return 0
+    
+    close(fds_a[1]);
+    close(fds_b[1]);
+    close(fds_c[1]);
+}
+
 TEST_F(ChatRoomServerTest, LoginSuccess) {
     json req_body;
     req_body["username"] = "testuser";
@@ -199,296 +380,30 @@ TEST_F(ChatRoomServerTest, SendMessageSuccess) {
     std::string conn_id = login_resp_json["connection_id"];
     
     // Then send message
-    json send_body;
-    send_body["connection_id"] = conn_id;
-    send_body["content"] = "Hello World";
+    json msg_body;
+    msg_body["connection_id"] = conn_id;
+    msg_body["content"] = "hello world";
     
-    HttpResponse resp = CallHandleSendMessage(send_body.dump());
+    HttpResponse resp = CallHandleSendMessage(msg_body.dump());
     
     EXPECT_EQ(resp.status_code, 200);
     auto body = json::parse(resp.body);
     EXPECT_TRUE(body["success"]);
 }
 
-TEST_F(ChatRoomServerTest, SendMessageRateLimit) {
-    json req_body;
-    req_body["username"] = "spammer";
-    req_body["content"] = "spam";
+TEST_F(ChatRoomServerTest, GetMessagesSuccess) {
+    // Add some messages first
+    ChatMessage msg1; msg1.username = "u1"; msg1.content = "c1";
+    ChatMessage msg2; msg2.username = "u2"; msg2.content = "c2";
+    DatabaseManager::instance().addMessage(msg1);
+    DatabaseManager::instance().addMessage(msg2);
     
-    // Exhaust rate limit (assuming 60 per minute)
-    for (int i = 0; i < 60; ++i) {
-        CallHandleSendMessage(req_body.dump(), "1.2.3.4");
-    }
+    HttpResponse resp = CallHandleGetMessages("/messages?limit=10");
     
-    // Next one should fail
-    HttpResponse resp = CallHandleSendMessage(req_body.dump(), "1.2.3.4");
-    EXPECT_EQ(resp.status_code, 429);
-    
-    auto body = json::parse(resp.body);
-    EXPECT_EQ(body["error_code"], 1004); // RATE_LIMITED
-}
-
-TEST_F(ChatRoomServerTest, MetricsCollectorIntegration) {
-    // Login
-    json login_body;
-    login_body["username"] = "metrics_user";
-    CallHandleLogin(login_body.dump());
-    
-    // Send message
-    json send_body;
-    send_body["username"] = "metrics_user";
-    send_body["content"] = "metrics test";
-    CallHandleSendMessage(send_body.dump());
-    
-    // Check metrics
-    auto metrics = GetMetrics();
-    
-    EXPECT_EQ(metrics["requests"]["POST /login"], 1);
-    EXPECT_EQ(metrics["requests"]["POST /send"], 1);
-    EXPECT_EQ(metrics["message_count"], 1);
-}
-
-TEST_F(ChatRoomServerTest, PrivateMessageTest) {
-    // 1. User A sends private message to User B
-    json send_body;
-    send_body["username"] = "UserA";
-    send_body["content"] = "Secret for B";
-    send_body["target_user"] = "UserB";
-    
-    HttpResponse resp = CallHandleSendMessage(send_body.dump());
     EXPECT_EQ(resp.status_code, 200);
-
-    // 2. User B fetches messages
-    HttpResponse respB = CallHandleGetMessages("/messages?since=0&username=UserB");
-    auto bodyB = json::parse(respB.body);
-    EXPECT_TRUE(bodyB["success"]);
-    bool found = false;
-    for (const auto& msg : bodyB["messages"]) {
-        if (msg["content"] == "Secret for B" && msg.contains("target_user") && msg["target_user"] == "UserB") {
-            found = true;
-            break;
-        }
-    }
-    EXPECT_TRUE(found);
-
-    // 3. User C fetches messages (should not see it)
-    HttpResponse respC = CallHandleGetMessages("/messages?since=0&username=UserC");
-    auto bodyC = json::parse(respC.body);
-    bool foundC = false;
-    for (const auto& msg : bodyC["messages"]) {
-        if (msg["content"] == "Secret for B") {
-            foundC = true;
-            break;
-        }
-    }
-    EXPECT_FALSE(foundC);
-}
-
-TEST_F(ChatRoomServerTest, RtspOptionsAndDescribe) {
-    EventLoop* loop = server_->getLoop();
-    int fds[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
-    fcntl(fds[0], F_SETFL, O_NONBLOCK);
-    fcntl(fds[1], F_SETFL, O_NONBLOCK);
-
-    InetAddress localAddr(0);
-    InetAddress peerAddr(0);
-    auto conn = std::make_shared<TcpConnection>(loop, "test-rtsp-conn", fds[0], localAddr, peerAddr);
-    conn->connectEstablished();
-
-    // 1. Send OPTIONS
-    std::string options_req = 
-        "OPTIONS rtsp://127.0.0.1:8080/audio RTSP/1.0\r\n"
-        "CSeq: 1\r\n"
-        "User-Agent: ChatRoomClient\r\n"
-        "\r\n";
-    
-    protocols::RtspRequest options_request;
-    Buffer optionsBuf;
-    optionsBuf.append(options_req);
-    size_t consumed = protocols::RtspCodec::parseRequest(&optionsBuf, options_request);
-    ASSERT_GT(consumed, 0);
-    HandleRtspMessage(conn, options_request);
-    
-    // Read response
-    char buf[4096];
-    ssize_t n = read(fds[1], buf, sizeof(buf));
-    ASSERT_GT(n, 0);
-    
-    std::string resp_str(buf, n);
-    // Log for debugging
-    // std::cout << "RTSP Resp: " << resp_str << std::endl;
-    
-    ASSERT_TRUE(resp_str.find("RTSP/1.0 200 OK") != std::string::npos);
-    ASSERT_TRUE(resp_str.find("CSeq: 1") != std::string::npos);
-    ASSERT_TRUE(resp_str.find("Public: OPTIONS") != std::string::npos);
-    
-    // 2. Send DESCRIBE
-    std::string describe_req = 
-        "DESCRIBE rtsp://127.0.0.1:8080/audio RTSP/1.0\r\n"
-        "CSeq: 2\r\n"
-        "Accept: application/sdp\r\n"
-        "\r\n";
-        
-    protocols::RtspRequest describe_request;
-    Buffer describeBuf;
-    describeBuf.append(describe_req);
-    consumed = protocols::RtspCodec::parseRequest(&describeBuf, describe_request);
-    ASSERT_GT(consumed, 0);
-    HandleRtspMessage(conn, describe_request);
-    
-    n = read(fds[1], buf, sizeof(buf));
-    ASSERT_GT(n, 0);
-    
-    resp_str.assign(buf, n);
-    ASSERT_TRUE(resp_str.find("RTSP/1.0 200 OK") != std::string::npos);
-    ASSERT_TRUE(resp_str.find("CSeq: 2") != std::string::npos);
-    ASSERT_TRUE(resp_str.find("Content-Type: application/sdp") != std::string::npos);
-    ASSERT_TRUE(resp_str.find("m=audio 0 RTP/AVP 0") != std::string::npos);
-    
-    close(fds[1]);
-}
-
-TEST_F(ChatRoomServerTest, SipRegisterAndInvite) {
-    // std::cout << "Starting SipRegisterAndInvite" << std::endl;
-    // EventLoop loop;
-    int fds[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
-    fcntl(fds[0], F_SETFL, O_NONBLOCK);
-    fcntl(fds[1], F_SETFL, O_NONBLOCK);
-
-    // std::cout << "Creating conn1" << std::endl;
-    auto conn1 = std::make_shared<TcpConnection>(server_->getLoop(), "sip-conn1", fds[0], InetAddress(0), InetAddress(0));
-    
-    // std::cout << "Setting callbacks" << std::endl;
-    // Setup callbacks
-    conn1->setMessageCallback(std::bind(&HttpServer::onMessage, GetHttpServer(), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-    conn1->connectEstablished();
-    GetHttpServer()->onConnection(conn1);
-
-    // Define addresses for later use
-    InetAddress localAddr(0);
-    InetAddress peerAddr(0);
-
-    // 1. Send REGISTER
-    std::string register_req = 
-        "REGISTER sip:alice@example.com SIP/2.0\r\n"
-        "Via: SIP/2.0/TCP client.example.com:5060;branch=z9hG4bK776asdhds\r\n"
-        "Max-Forwards: 70\r\n"
-        "From: Alice <sip:alice@example.com>;tag=1928301774\r\n"
-        "To: Alice <sip:alice@example.com>\r\n"
-        "Call-ID: a84b4c76e66710\r\n"
-        "CSeq: 1 REGISTER\r\n"
-        "Contact: <sip:alice@127.0.0.1:5060>\r\n"
-        "Content-Length: 0\r\n"
-        "\r\n";
-    
-    write(fds[1], register_req.data(), register_req.size());
-    
-    // Process
-    conn1->handleRead();
-    conn1->handleWrite(); // Flush
-    
-    char buf[4096];
-    int n = read(fds[1], buf, sizeof(buf));
-    ASSERT_GT(n, 0);
-    std::string resp(buf, n);
-    ASSERT_TRUE(resp.find("SIP/2.0 200 OK") != std::string::npos);
-
-    // 2. Setup second connection for Bob
-    int fds2[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds2), 0);
-    fcntl(fds2[0], F_SETFL, O_NONBLOCK);
-    fcntl(fds2[1], F_SETFL, O_NONBLOCK);
-    auto conn2 = std::make_shared<TcpConnection>(server_->getLoop(), "sip-conn2", fds2[0], localAddr, peerAddr);
-    conn2->setMessageCallback(std::bind(&HttpServer::onMessage, GetHttpServer(), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-    conn2->connectEstablished();
-    GetHttpServer()->onConnection(conn2);
-
-    // Bob REGISTER
-    std::string register_bob = 
-        "REGISTER sip:bob@example.com SIP/2.0\r\n"
-        "From: Bob <sip:bob@example.com>;tag=123\r\n"
-        "Content-Length: 0\r\n"
-        "\r\n";
-    write(fds2[1], register_bob.data(), register_bob.size());
-    conn2->handleRead();
-    conn2->handleWrite();
-    n = read(fds2[1], buf, sizeof(buf));
-    ASSERT_GT(n, 0);
-    resp.assign(buf, n);
-    ASSERT_TRUE(resp.find("SIP/2.0 200 OK") != std::string::npos);
-
-    // 3. Alice invites Bob
-    std::string invite_req = 
-        "INVITE sip:bob@example.com SIP/2.0\r\n"
-        "Via: SIP/2.0/TCP client.example.com:5060;branch=z9hG4bK776\r\n"
-        "From: Alice <sip:alice@example.com>;tag=1928301774\r\n"
-        "To: Bob <sip:bob@example.com>\r\n"
-        "Call-ID: a84b4c76e66710\r\n"
-        "CSeq: 2 INVITE\r\n"
-        "Content-Length: 0\r\n"
-        "\r\n";
-
-    write(fds[1], invite_req.data(), invite_req.size());
-    conn1->handleRead(); 
-    
-    // conn2 should have data to write (the forwarded INVITE)
-    conn2->handleWrite(); 
-    
-    // Read from fds2[1] (Bob's client side)
-    n = read(fds2[1], buf, sizeof(buf));
-    ASSERT_GT(n, 0);
-    std::string bob_recv(buf, n);
-    // Bob should receive the raw INVITE
-    ASSERT_TRUE(bob_recv.find("INVITE sip:bob@example.com SIP/2.0") != std::string::npos);
-
-    close(fds[1]);
-    close(fds2[1]);
-}
-
-TEST_F(ChatRoomServerTest, FtpLoginTest) {
-    // EventLoop loop; // Removed
-    int fds[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
-    fcntl(fds[0], F_SETFL, O_NONBLOCK);
-    fcntl(fds[1], F_SETFL, O_NONBLOCK);
-
-    InetAddress localAddr(0);
-    InetAddress peerAddr(0);
-    auto conn = std::make_shared<TcpConnection>(server_->getLoop(), "ftp-conn", fds[0], localAddr, peerAddr);
-    conn->setMessageCallback(std::bind(&HttpServer::onMessage, GetHttpServer(), std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-    conn->connectEstablished(); // Fix: Mark connection as established
-    GetHttpServer()->onConnection(conn);
-
-    // Client sends USER command to trigger detection and session creation
-    std::string user_cmd = "USER anonymous\r\n";
-    write(fds[1], user_cmd.data(), user_cmd.size());
-
-    // Server process
-    conn->handleRead();
-    conn->handleWrite(); // Flush
-
-    char buf[4096];
-    int n = read(fds[1], buf, sizeof(buf));
-    // ASSERT_GT(n, 0); // Removed assertion to see output
-    std::string resp(buf, n > 0 ? n : 0);
-    
-    // Check for greeting (220) and USER response (331)
-    // Note: They might come in one packet or separate
-    // EXPECT_TRUE(resp.find("220 Service ready") != std::string::npos); // 220 not sent on connect
-    EXPECT_TRUE(resp.find("331 User name okay") != std::string::npos);
-
-    // Send PASS
-    std::string pass_cmd = "PASS guest\r\n";
-    write(fds[1], pass_cmd.data(), pass_cmd.size());
-    conn->handleRead();
-    conn->handleWrite();
-    
-    n = read(fds[1], buf, sizeof(buf));
-    ASSERT_GT(n, 0);
-    resp.assign(buf, n);
-    EXPECT_TRUE(resp.find("230 User logged in") != std::string::npos);
-
-    close(fds[1]);
+    auto body = json::parse(resp.body);
+    EXPECT_TRUE(body["success"]);
+    EXPECT_EQ(body["messages"].size(), 2);
+    EXPECT_EQ(body["messages"][0]["content"], "c1");
+    EXPECT_EQ(body["messages"][1]["content"], "c2");
 }

@@ -27,7 +27,9 @@ void receiveMessages(ChatRoomClient& client) {
             if (!msg.target_user.empty()) {
                 std::cout << "[私聊] " << msg.username << " -> " << msg.target_user << ": " << msg.content << std::endl;
             } else if (!msg.room_id.empty()) {
-                std::cout << "[房间 " << msg.room_id << "] " << msg.username << ": " << msg.content << std::endl;
+                if (client.isJoined(msg.room_id)) {
+                    std::cout << "[房间 " << msg.room_id << "] " << msg.username << ": " << msg.content << std::endl;
+                }
             } else {
                 std::cout << msg.username << ": " << msg.content << std::endl;
             }
@@ -44,6 +46,8 @@ void printHelp() {
     std::cout << "/help   - 显示此帮助信息" << std::endl;
     std::cout << "/users  - 显示在线用户列表" << std::endl;
     std::cout << "/stats  - 显示服务器统计信息" << std::endl;
+    std::cout << "/join <房间> - 加入房间" << std::endl;
+    std::cout << "/leave <房间> - 离开房间" << std::endl;
     std::cout << "/msg <用户> <内容> - 发送私聊消息" << std::endl;
     std::cout << "/room <房间> <内容> - 发送房间消息" << std::endl;
     std::cout << "/quit   - 退出聊天室" << std::endl;
@@ -124,6 +128,22 @@ int main(int argc, char* argv[]) {
                 } else if (input == "/stats") {
                     std::string stats = client.getStats();
                     std::cout << "\n=== 服务器统计 ===\n" << stats << "\n==================" << std::endl;
+                } else if (input.rfind("/join ", 0) == 0) {
+                    std::string room = input.substr(6);
+                    if (!room.empty()) {
+                        client.joinRoom(room);
+                        std::cout << "已加入房间: " << room << std::endl;
+                    } else {
+                        std::cout << "用法: /join <房间名>" << std::endl;
+                    }
+                } else if (input.rfind("/leave ", 0) == 0) {
+                    std::string room = input.substr(7);
+                    if (!room.empty()) {
+                        client.leaveRoom(room);
+                        std::cout << "已离开房间: " << room << std::endl;
+                    } else {
+                        std::cout << "用法: /leave <房间名>" << std::endl;
+                    }
                 } else if (input.rfind("/msg ", 0) == 0) {
                     std::istringstream iss(input);
                     std::string cmd, target, content;

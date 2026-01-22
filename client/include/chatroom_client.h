@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <set>
 
 struct User {
     std::string username;
@@ -42,6 +43,11 @@ public:
     // 获取用户名
     std::string getUsername() const { return username_; }
 
+    // 房间管理
+    void joinRoom(const std::string& room_id);
+    void leaveRoom(const std::string& room_id);
+    bool isJoined(const std::string& room_id) const;
+
     bool sendHeartbeat();
 
     ~ChatRoomClient();
@@ -53,6 +59,7 @@ private:
     std::string connection_id_;
     size_t last_message_count_;
     int sock_fd_ = -1;
+    std::set<std::string> joined_rooms_;
     
     // 连接服务器
     void connectToServer();

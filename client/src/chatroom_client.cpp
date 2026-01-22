@@ -207,6 +207,18 @@ bool ChatRoomClient::sendHeartbeat() {
     }
 }
 
+void ChatRoomClient::joinRoom(const std::string& room_id) {
+    joined_rooms_.insert(room_id);
+}
+
+void ChatRoomClient::leaveRoom(const std::string& room_id) {
+    joined_rooms_.erase(room_id);
+}
+
+bool ChatRoomClient::isJoined(const std::string& room_id) const {
+    return joined_rooms_.find(room_id) != joined_rooms_.end();
+}
+
 std::string ChatRoomClient::sendHttpRequest(const std::string& method, 
                                            const std::string& path, 
                                            const std::string& body) {

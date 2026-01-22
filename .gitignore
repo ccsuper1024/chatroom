@@ -37,6 +37,8 @@ dist/*
 
 # 第三方依赖库
 # third_party/
+third_party/*-build/
+third_party/*-subbuild/
 
 # 运行时数据
 *.db

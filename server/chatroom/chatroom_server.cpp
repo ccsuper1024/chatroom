@@ -68,20 +68,23 @@ ChatRoomServer::ChatRoomServer(int port)
       running_(false) {
     chat_service_ = std::make_unique<ChatService>(metrics_collector_, session_manager_.get());
     http_server_ = std::make_unique<HttpServer>(&loop_, port);
+    rtsp_server_ = std::make_unique<RtspServer>(&loop_, port + 1);
+    sip_server_ = std::make_unique<SipServer>(&loop_, port + 2);
+    ftp_server_ = std::make_unique<FtpServer>(&loop_, port + 3);
     
     http_server_->setWebSocketHandler([this](std::shared_ptr<TcpConnection> conn, const protocols::WebSocketFrame& frame) {
         handleWebSocketMessage(conn, frame);
     });
 
-    http_server_->setRtspHandler([this](std::shared_ptr<TcpConnection> conn, const protocols::RtspRequest& req) {
+    rtsp_server_->setRtspHandler([this](std::shared_ptr<TcpConnection> conn, const protocols::RtspRequest& req) {
         handleRtspMessage(conn, req);
     });
 
-    http_server_->setSipHandler([this](std::shared_ptr<TcpConnection> conn, const SipRequest& req, const std::string& raw_msg) {
+    sip_server_->setSipHandler([this](std::shared_ptr<TcpConnection> conn, const SipRequest& req, const std::string& raw_msg) {
         chat_service_->handleSipMessage(conn, req, raw_msg);
     });
 
-    http_server_->setFtpHandler([this](std::shared_ptr<TcpConnection> conn, const std::string& command) {
+    ftp_server_->setFtpHandler([this](std::shared_ptr<TcpConnection> conn, const std::string& command) {
         chat_service_->handleFtpMessage(conn, command);
     });
 
@@ -138,7 +141,14 @@ void ChatRoomServer::start() {
     start_time_ = std::chrono::system_clock::now();
     running_.store(true);
     session_manager_->start();
+    
+    LOG_INFO("ChatRoomServer starting on ports: HTTP={}, RTSP={}, SIP={}, FTP={}", 
+             http_server_->port(), rtsp_server_->port(), sip_server_->port(), ftp_server_->port());
+
     http_server_->start();
+    rtsp_server_->start();
+    sip_server_->start();
+    ftp_server_->start();
     
     loop_.loop();
     
@@ -458,6 +468,7 @@ void ChatRoomServer::handleWebSocketMessage(std::shared_ptr<TcpConnection> conn,
                     {
                         std::lock_guard<std::mutex> lock(ws_mutex_);
                         ws_connections_[conn->name()] = username;
+                        user_connections_[username] = conn;
                     }
                     
                     json resp;
@@ -469,6 +480,45 @@ void ChatRoomServer::handleWebSocketMessage(std::shared_ptr<TcpConnection> conn,
                     auto frameData = protocols::WebSocketCodec::buildFrame(protocols::WebSocketOpcode::TEXT, respStr);
                     conn->send(std::string(frameData.begin(), frameData.end()));
                     LOG_INFO("WS User login: {}", username);
+                }
+            } else if (type == "join_room") {
+                std::string room_id = j.value("room_id", "");
+                std::string username;
+                {
+                    std::lock_guard<std::mutex> lock(ws_mutex_);
+                    auto it = ws_connections_.find(conn->name());
+                    if (it != ws_connections_.end()) {
+                        username = it->second;
+                    }
+                }
+                
+                if (!username.empty() && !room_id.empty()) {
+                    {
+                        std::lock_guard<std::mutex> lock(ws_mutex_);
+                        room_members_[room_id].insert(username);
+                    }
+                    LOG_INFO("User {} joined room {}", username, room_id);
+                }
+            } else if (type == "leave_room") {
+                std::string room_id = j.value("room_id", "");
+                std::string username;
+                {
+                    std::lock_guard<std::mutex> lock(ws_mutex_);
+                    auto it = ws_connections_.find(conn->name());
+                    if (it != ws_connections_.end()) {
+                        username = it->second;
+                    }
+                }
+                
+                if (!username.empty() && !room_id.empty()) {
+                    {
+                        std::lock_guard<std::mutex> lock(ws_mutex_);
+                        room_members_[room_id].erase(username);
+                        if (room_members_[room_id].empty()) {
+                            room_members_.erase(room_id);
+                        }
+                    }
+                    LOG_INFO("User {} left room {}", username, room_id);
                 }
             } else if (type == "message") {
                 std::string content = j.value("content", "");
@@ -496,6 +546,50 @@ void ChatRoomServer::handleWebSocketMessage(std::shared_ptr<TcpConnection> conn,
                         metrics_collector_->updateMessageCount(DatabaseManager::instance().getMessageCount());
                     }
                     
+                    // Forwarding Logic
+                    json forward_msg;
+                    forward_msg["type"] = "message"; 
+                    forward_msg["username"] = username;
+                    forward_msg["content"] = content;
+                    forward_msg["timestamp"] = msg.timestamp;
+                    if (!target.empty()) forward_msg["target_user"] = target;
+                    if (!room.empty()) forward_msg["room_id"] = room;
+                    
+                    std::string forwardStr = forward_msg.dump();
+                    auto forwardFrame = protocols::WebSocketCodec::buildFrame(protocols::WebSocketOpcode::TEXT, forwardStr);
+                    std::string forwardData(forwardFrame.begin(), forwardFrame.end());
+
+                    {
+                        std::lock_guard<std::mutex> lock(ws_mutex_);
+                        if (!target.empty()) {
+                            // Private message
+                            auto it = user_connections_.find(target);
+                            if (it != user_connections_.end()) {
+                                it->second->send(forwardData);
+                            }
+                        } else if (!room.empty()) {
+                            // Room Broadcast
+                            auto it = room_members_.find(room);
+                            if (it != room_members_.end()) {
+                                for (const auto& member : it->second) {
+                                    if (member != username) {
+                                        auto user_it = user_connections_.find(member);
+                                        if (user_it != user_connections_.end()) {
+                                            user_it->second->send(forwardData);
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // Global Broadcast (to all except sender)
+                            for (auto& pair : user_connections_) {
+                                if (pair.first != username) {
+                                    pair.second->send(forwardData);
+                                }
+                            }
+                        }
+                    }
+                    
                     // Echo confirmation
                     json resp;
                     resp["type"] = "message_response";
@@ -512,7 +606,25 @@ void ChatRoomServer::handleWebSocketMessage(std::shared_ptr<TcpConnection> conn,
         }
     } else if (frame.opcode == protocols::WebSocketOpcode::CLOSE) {
         std::lock_guard<std::mutex> lock(ws_mutex_);
-        ws_connections_.erase(conn->name());
+        auto it = ws_connections_.find(conn->name());
+        if (it != ws_connections_.end()) {
+            std::string username = it->second;
+            user_connections_.erase(username);
+            ws_connections_.erase(it);
+            
+            // Remove from all rooms
+            for (auto& pair : room_members_) {
+                pair.second.erase(username);
+            }
+            // Cleanup empty rooms
+             for (auto it_room = room_members_.begin(); it_room != room_members_.end(); ) {
+                if (it_room->second.empty()) {
+                    it_room = room_members_.erase(it_room);
+                } else {
+                    ++it_room;
+                }
+            }
+        }
     }
 }
 

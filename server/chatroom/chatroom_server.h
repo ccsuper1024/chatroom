@@ -1,6 +1,9 @@
 #pragma once
 
 #include "http/http_server.h"
+#include "rtsp/rtsp_server.h"
+#include "sip/sip_server.h"
+#include "ftp/ftp_server.h"
 #include "utils/metrics_collector.h"
 #include "utils/server_error.h"
 #include "utils/rate_limiter.h"
@@ -12,6 +15,7 @@
 #include <mutex>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <chrono>
 #include <ratio>
 #include <thread>
@@ -62,6 +66,9 @@ public:
 private:
     EventLoop loop_;
     std::unique_ptr<HttpServer> http_server_;           ///< HTTP服务器实例
+    std::unique_ptr<RtspServer> rtsp_server_;           ///< RTSP服务器实例
+    std::unique_ptr<SipServer> sip_server_;             ///< SIP服务器实例
+    std::unique_ptr<FtpServer> ftp_server_;             ///< FTP服务器实例
 
     std::shared_ptr<MetricsCollector> metrics_collector_; ///< 指标收集器
     std::unique_ptr<SessionManager> session_manager_;   ///< 会话管理器
@@ -160,6 +167,8 @@ private:
      */
     void handleWebSocketMessage(std::shared_ptr<TcpConnection> conn, const protocols::WebSocketFrame& frame);
     std::unordered_map<std::string, std::string> ws_connections_; ///< WebSocket连接映射 (conn_name -> username)
+    std::unordered_map<std::string, std::shared_ptr<TcpConnection>> user_connections_; ///< 用户连接映射 (username -> TcpConnection)
+    std::unordered_map<std::string, std::unordered_set<std::string>> room_members_; ///< 聊天室成员映射 (room_id -> set<username>)
     std::mutex ws_mutex_;                                 ///< WebSocket连接映射互斥锁
 
     // RTSP Handling
