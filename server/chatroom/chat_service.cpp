@@ -3,6 +3,7 @@
 #include "utils/json_utils.h"
 #include "utils/server_error.h"
 #include "database_manager.h"
+#include "chat_message.h"
 #include "utils/server_config.h"
 #include "logger.h"
 #include "net/tcp_connection.h"

@@ -36,10 +36,14 @@ dist/*
 .cache/
 
 # 第三方依赖库
-third_party/
+# third_party/
 
 # 运行时数据
 *.db
 *.sqlite
 data/
 *.json
+
+# IDE Config
+.trae/
+

@@ -68,16 +68,8 @@ public:
      */
     static int parseFrame(uint8_t* data, size_t len, WebSocketFrame& out_frame);
     
-    // Legacy support (Deprecated for zero-copy)
-    static int parseFrame(const std::vector<uint8_t>& buffer, WebSocketFrame& out_frame) {
-        // Must copy to allow modification for unmasking or fail if const
-        // This legacy method cannot support zero-copy safely with unmasking
-        // We removed it or keep it but it won't be zero-copy. 
-        // For now, let's remove it to force update or implement via copy.
-        std::vector<uint8_t> copy = buffer;
-        return parseFrame(copy.data(), copy.size(), out_frame);
-    }
-
+    // Legacy support removed to prevent dangling string_view issues
+    
     // Frame Building
     /**
      * @brief 构建WebSocket数据帧

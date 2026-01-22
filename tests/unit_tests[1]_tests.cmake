@@ -1,7 +1,0 @@
-add_test([=[ChatRoomServerTest.ValidateUsername]=]  /home/chenchao/code/cplusplus/chatroom/tests/unit_tests [==[--gtest_filter=ChatRoomServerTest.ValidateUsername]==] --gtest_also_run_disabled_tests)
-set_tests_properties([=[ChatRoomServerTest.ValidateUsername]=]  PROPERTIES WORKING_DIRECTORY /home/chenchao/code/cplusplus/chatroom/tests SKIP_REGULAR_EXPRESSION [==[\[  SKIPPED \]]==])
-add_test([=[ChatRoomServerTest.ValidateMessage]=]  /home/chenchao/code/cplusplus/chatroom/tests/unit_tests [==[--gtest_filter=ChatRoomServerTest.ValidateMessage]==] --gtest_also_run_disabled_tests)
-set_tests_properties([=[ChatRoomServerTest.ValidateMessage]=]  PROPERTIES WORKING_DIRECTORY /home/chenchao/code/cplusplus/chatroom/tests SKIP_REGULAR_EXPRESSION [==[\[  SKIPPED \]]==])
-add_test([=[ChatRoomServerTest.RateLimiting]=]  /home/chenchao/code/cplusplus/chatroom/tests/unit_tests [==[--gtest_filter=ChatRoomServerTest.RateLimiting]==] --gtest_also_run_disabled_tests)
-set_tests_properties([=[ChatRoomServerTest.RateLimiting]=]  PROPERTIES WORKING_DIRECTORY /home/chenchao/code/cplusplus/chatroom/tests SKIP_REGULAR_EXPRESSION [==[\[  SKIPPED \]]==])
-set(  unit_tests_TESTS ChatRoomServerTest.ValidateUsername ChatRoomServerTest.ValidateMessage ChatRoomServerTest.RateLimiting)

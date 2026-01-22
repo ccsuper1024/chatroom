@@ -50,7 +50,7 @@ TEST(WebSocketTest, ParseFrameMasked) {
     };
 
     WebSocketFrame frame;
-    int consumed = WebSocketCodec::parseFrame(buffer.data(), buffer.size(), frame);
+    size_t consumed = WebSocketCodec::parseFrame(buffer.data(), buffer.size(), frame);
     
     EXPECT_EQ(consumed, buffer.size());
     EXPECT_TRUE(frame.fin);

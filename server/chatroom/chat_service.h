@@ -6,7 +6,6 @@
 #include "http/http_codec.h"
 #include "utils/metrics_collector.h"
 #include "utils/rate_limiter.h"
-#include "chat_message.h"
 #include "sip/sip_codec.h"
 
 class SessionManager;

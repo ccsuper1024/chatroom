@@ -116,13 +116,15 @@ TEST_F(ChatRoomServerTest, WebSocketLoginAndMessage) {
     
     std::vector<uint8_t> recv_buf(buf, buf + n);
     protocols::WebSocketFrame resp_frame;
-    int consumed = protocols::WebSocketCodec::parseFrame(recv_buf, resp_frame);
+    int consumed = protocols::WebSocketCodec::parseFrame(recv_buf.data(), recv_buf.size(), resp_frame);
     ASSERT_GT(consumed, 0);
     
+    // Verify response
     std::string resp_payload(resp_frame.payload.begin(), resp_frame.payload.end());
     auto resp_json = json::parse(resp_payload);
     EXPECT_EQ(resp_json["type"], "login_response");
     EXPECT_TRUE(resp_json["success"]);
+    EXPECT_EQ(resp_json["username"], "ws_user");
     
     // 2. Send Message
     json msg_req;
@@ -138,7 +140,7 @@ TEST_F(ChatRoomServerTest, WebSocketLoginAndMessage) {
     ASSERT_GT(n, 0);
     
     recv_buf.assign(buf, buf + n);
-    consumed = protocols::WebSocketCodec::parseFrame(recv_buf, resp_frame);
+    consumed = protocols::WebSocketCodec::parseFrame(recv_buf.data(), recv_buf.size(), resp_frame);
     ASSERT_GT(consumed, 0);
     
     resp_payload.assign(resp_frame.payload.begin(), resp_frame.payload.end());

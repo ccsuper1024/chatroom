@@ -66,6 +66,8 @@ int WebSocketCodec::parseFrame(uint8_t* data, size_t len, WebSocketFrame& out_fr
     // Unmask in-place if needed
     uint8_t* payload_ptr = &data[offset];
     if (out_frame.masked && payload_len > 0) {
+        // Need to make sure we don't modify data if it's supposed to be const,
+        // but our API takes uint8_t* which implies mutability.
         for (size_t i = 0; i < payload_len; ++i) {
             payload_ptr[i] ^= masking_key[i % 4];
         }
