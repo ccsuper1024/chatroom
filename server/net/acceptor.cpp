@@ -36,7 +36,7 @@ Acceptor::Acceptor(EventLoop* loop, const InetAddress& listenAddr, bool reusepor
     }
     
     if (::bind(acceptSocketFd_, (const struct sockaddr*)listenAddr.getSockAddr(), sizeof(struct sockaddr_in)) < 0) {
-        LOG_FATAL("Acceptor::bind");
+        LOG_FATAL("Acceptor::bind - port: {} - errno: {} ({})", listenAddr.toPort(), errno, strerror(errno));
     }
     
     acceptChannel_.setReadCallback(std::bind(&Acceptor::handleRead, this));

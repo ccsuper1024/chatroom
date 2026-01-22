@@ -25,7 +25,9 @@ chatroom/
 ├── DEPLOY.md               # 部署文档 ⭐
 ├── .gitignore              # Git忽略配置
 ├── start_server.sh         # 服务器启动脚本
+├── stop_server.sh          # 服务器停止脚本
 ├── start_client.sh         # 客户端启动脚本
+├── stop_client.sh          # 客户端停止脚本
 ├── deploy_client.sh        # 客户端部署脚本 ⭐
 │
 ├── server/                 # 服务器代码目录
