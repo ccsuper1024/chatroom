@@ -10,6 +10,10 @@
 #include <vector>
 #include <memory>
 #include "utils/metrics_collector.h"
+#include "net/timer_fd.h"
+
+class EventLoop;
+class TcpConnection;
 
 /**
  * @brief 用户会话结构体
@@ -32,17 +36,7 @@ struct UserSession {
  */
 class SessionManager {
 public:
-    /**
-     * @brief 构造函数
-     * @param metrics 指标收集器指针
-     */
-    SessionManager(std::shared_ptr<MetricsCollector> metrics);
-    
-    /**
-     * @brief 析构函数
-     * 
-     * 停止清理线程并释放资源。
-     */
+    explicit SessionManager(EventLoop* loop, std::shared_ptr<MetricsCollector> metrics);
     ~SessionManager();
 
     /**
@@ -76,6 +70,7 @@ public:
      */
     LoginResult login(const std::string& username);
     
+<<<<<<< HEAD
     /**
      * @brief 更新用户心跳
      * @param connection_id 连接ID
@@ -83,6 +78,12 @@ public:
      * @return true 更新成功
      * @return false 会话不存在或更新失败
      */
+=======
+    // SIP Session Management
+    void registerSipSession(const std::string& username, std::shared_ptr<TcpConnection> conn);
+    std::shared_ptr<TcpConnection> getSipConnection(const std::string& username);
+
+>>>>>>> 608261f (Refactor: Unified fd abstraction, SIP/FTP support, and directory restructuring)
     bool updateHeartbeat(const std::string& connection_id, const std::string& client_version);
     
     // Getters
@@ -100,25 +101,14 @@ public:
     std::vector<UserSession> getAllSessions();
     
 private:
-    /**
-     * @brief 会话清理循环
-     * 
-     * 后台线程运行的函数，定期检查并移除超时会话。
-     */
-    void cleanupLoop();
-    
-    /**
-     * @brief 生成唯一连接ID
-     * @return std::string UUID字符串
-     */
+    void cleanup();
     std::string generateConnectionId();
 
-    std::shared_ptr<MetricsCollector> metrics_collector_; ///< 指标收集器
-    std::unordered_map<std::string, UserSession> sessions_; ///< 会话映射表 (connection_id -> Session)
-    std::mutex mutex_;                                      ///< 会话操作互斥锁
+    EventLoop* loop_;
+    std::shared_ptr<MetricsCollector> metrics_collector_;
+    std::unordered_map<std::string, UserSession> sessions_;
+    std::unordered_map<std::string, std::weak_ptr<TcpConnection>> sip_sessions_; // username -> connection
+    std::mutex mutex_;
     
-    std::atomic<bool> running_;                             ///< 运行标志
-    std::thread cleanup_thread_;                            ///< 清理线程
-    std::mutex cleanup_mutex_;                              ///< 清理线程互斥锁
-    std::condition_variable cleanup_cv_;                    ///< 清理线程条件变量
+    std::unique_ptr<TimerFd> timer_;
 };
