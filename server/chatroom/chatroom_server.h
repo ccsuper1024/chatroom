@@ -83,6 +83,13 @@ private:
      * @return HttpResponse HTTP响应对象
      */
     HttpResponse handleLogin(const HttpRequest& request);
+
+    /**
+     * @brief 处理用户注册请求
+     * @param request HTTP请求对象
+     * @return HttpResponse HTTP响应对象
+     */
+    HttpResponse handleRegister(const HttpRequest& request);
     
     /**
      * @brief 处理发送消息请求

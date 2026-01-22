@@ -76,6 +76,17 @@ bool MysqlDatabase::init(const DatabaseConfig& config) {
         return false;
     }
 
+    const char* user_sql = "CREATE TABLE IF NOT EXISTS users ("
+                           "id BIGINT PRIMARY KEY AUTO_INCREMENT,"
+                           "username VARCHAR(255) NOT NULL UNIQUE,"
+                           "password VARCHAR(255) NOT NULL"
+                           ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
+    
+    if (mysql_query(conn, user_sql)) {
+        LOG_ERROR("MySQL create users table error: {}", mysql_error(conn));
+        return false;
+    }
+
     // Attempt to add columns if they don't exist (migration for existing DB)
     // We ignore errors because if column exists, it will fail, which is fine.
     const char* alter_sql1 = "ALTER TABLE messages ADD COLUMN target_user VARCHAR(255);";
@@ -315,4 +326,100 @@ long long MysqlDatabase::getMessageCount() {
     mysql_free_result(res);
     releaseConnection(conn);
     return count;
+}
+
+bool MysqlDatabase::addUser(const std::string& username, const std::string& password) {
+    if (!initialized_) return false;
+    
+    MYSQL* conn = getConnection();
+    if (!conn) return false;
+
+    char* escaped_username = new char[username.length() * 2 + 1];
+    char* escaped_password = new char[password.length() * 2 + 1];
+    
+    mysql_real_escape_string(conn, escaped_username, username.c_str(), username.length());
+    mysql_real_escape_string(conn, escaped_password, password.c_str(), password.length());
+    
+    std::string sql = "INSERT INTO users (username, password) VALUES ('" + 
+                      std::string(escaped_username) + "', '" + 
+                      std::string(escaped_password) + "')";
+                      
+    delete[] escaped_username;
+    delete[] escaped_password;
+    
+    bool success = true;
+    if (mysql_query(conn, sql.c_str())) {
+        LOG_ERROR("MySQL insert user error: {}", mysql_error(conn));
+        success = false;
+    }
+    
+    releaseConnection(conn);
+    return success;
+}
+
+bool MysqlDatabase::validateUser(const std::string& username, const std::string& password) {
+    if (!initialized_) return false;
+    
+    MYSQL* conn = getConnection();
+    if (!conn) return false;
+
+    char* escaped_username = new char[username.length() * 2 + 1];
+    mysql_real_escape_string(conn, escaped_username, username.c_str(), username.length());
+    
+    std::string sql = "SELECT password FROM users WHERE username = '" + std::string(escaped_username) + "'";
+    delete[] escaped_username;
+    
+    if (mysql_query(conn, sql.c_str())) {
+        LOG_ERROR("MySQL query user error: {}", mysql_error(conn));
+        releaseConnection(conn);
+        return false;
+    }
+    
+    MYSQL_RES* res = mysql_store_result(conn);
+    if (!res) {
+        releaseConnection(conn);
+        return false;
+    }
+    
+    bool valid = false;
+    MYSQL_ROW row = mysql_fetch_row(res);
+    if (row && row[0]) {
+        if (password == std::string(row[0])) {
+            valid = true;
+        }
+    }
+    
+    mysql_free_result(res);
+    releaseConnection(conn);
+    return valid;
+}
+
+bool MysqlDatabase::userExists(const std::string& username) {
+    if (!initialized_) return false;
+    
+    MYSQL* conn = getConnection();
+    if (!conn) return false;
+
+    char* escaped_username = new char[username.length() * 2 + 1];
+    mysql_real_escape_string(conn, escaped_username, username.c_str(), username.length());
+    
+    std::string sql = "SELECT 1 FROM users WHERE username = '" + std::string(escaped_username) + "'";
+    delete[] escaped_username;
+    
+    if (mysql_query(conn, sql.c_str())) {
+        releaseConnection(conn);
+        return false;
+    }
+    
+    MYSQL_RES* res = mysql_store_result(conn);
+    bool exists = false;
+    if (res) {
+        if (mysql_fetch_row(res)) {
+            exists = true;
+        }
+        mysql_free_result(res);
+    }
+    
+    releaseConnection(conn);
+    return exists;
 }

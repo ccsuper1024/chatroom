@@ -46,3 +46,21 @@ long long DatabaseManager::getMessageCount() {
     if (!db_) return 0;
     return db_->getMessageCount();
 }
+
+bool DatabaseManager::addUser(const std::string& username, const std::string& password) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!db_) return false;
+    return db_->addUser(username, password);
+}
+
+bool DatabaseManager::validateUser(const std::string& username, const std::string& password) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!db_) return false;
+    return db_->validateUser(username, password);
+}
+
+bool DatabaseManager::userExists(const std::string& username) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!db_) return false;
+    return db_->userExists(username);
+}

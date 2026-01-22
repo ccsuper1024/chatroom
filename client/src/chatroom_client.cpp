@@ -76,10 +76,34 @@ void ChatRoomClient::closeConnection() {
     }
 }
 
-bool ChatRoomClient::login(const std::string& username) {
+bool ChatRoomClient::registerUser(const std::string& username, const std::string& password) {
     try {
         json request;
         request["username"] = username;
+        request["password"] = password;
+        
+        std::string response = sendHttpRequest("POST", "/register", request.dump());
+        
+        auto resp_json = json::parse(response);
+        if (resp_json["success"]) {
+            LOG_INFO("注册成功: {}", username);
+            return true;
+        } else {
+            std::string error_msg = resp_json.value("error", "Unknown error");
+            LOG_ERROR("注册失败: {}", error_msg);
+            return false;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("注册异常: {}", e.what());
+        return false;
+    }
+}
+
+bool ChatRoomClient::login(const std::string& username, const std::string& password) {
+    try {
+        json request;
+        request["username"] = username;
+        request["password"] = password;
         
         std::string response = sendHttpRequest("POST", "/login", request.dump());
         

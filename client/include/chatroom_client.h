@@ -25,8 +25,11 @@ class ChatRoomClient {
 public:
     ChatRoomClient(const std::string& server_host, int server_port);
     
+    // 注册
+    bool registerUser(const std::string& username, const std::string& password);
+
     // 登录
-    bool login(const std::string& username);
+    bool login(const std::string& username, const std::string& password);
     
     // 发送消息
     bool sendMessage(const std::string& content, const std::string& target_user = "", const std::string& room_id = "");

@@ -78,16 +78,50 @@ int main(int argc, char* argv[]) {
         // 创建客户端
         ChatRoomClient client(server_host, server_port);
         
-        // 登录
+        // 登录/注册逻辑
         std::string username;
-        std::cout << "请输入用户名: ";
-        if (!std::getline(std::cin, username) || username.empty()) {
-            return 1;
-        }
-        
-        if (!client.login(username)) {
-            std::cerr << "登录失败！" << std::endl;
-            return 1;
+        while (true) {
+            std::cout << "请选择操作: [1] 登录 [2] 注册 [3] 退出: ";
+            std::string choice;
+            if (!std::getline(std::cin, choice)) return 1;
+            
+            if (choice == "3") return 0;
+            
+            if (choice == "1") {
+                std::string password;
+                std::cout << "请输入用户名: ";
+                std::getline(std::cin, username);
+                std::cout << "请输入密码: ";
+                std::getline(std::cin, password);
+                
+                if (username.empty() || password.empty()) {
+                    std::cout << "用户名或密码不能为空" << std::endl;
+                    continue;
+                }
+                
+                if (client.login(username, password)) {
+                    break;
+                } else {
+                    std::cout << "登录失败，请重试。" << std::endl;
+                }
+            } else if (choice == "2") {
+                std::string reg_user, reg_pass;
+                std::cout << "注册用户名: ";
+                std::getline(std::cin, reg_user);
+                std::cout << "注册密码: ";
+                std::getline(std::cin, reg_pass);
+                
+                if (reg_user.empty() || reg_pass.empty()) {
+                    std::cout << "用户名或密码不能为空" << std::endl;
+                    continue;
+                }
+                
+                if (client.registerUser(reg_user, reg_pass)) {
+                    std::cout << "注册成功！请登录。" << std::endl;
+                } else {
+                    std::cout << "注册失败 (可能用户名已存在)。" << std::endl;
+                }
+            }
         }
         
         std::cout << "登录成功！欢迎 " << username << std::endl;

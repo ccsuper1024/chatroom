@@ -24,6 +24,11 @@ public:
     // Get total message count
     long long getMessageCount();
 
+    // User Management
+    bool addUser(const std::string& username, const std::string& password);
+    bool validateUser(const std::string& username, const std::string& password);
+    bool userExists(const std::string& username);
+
 private:
     DatabaseManager();
     ~DatabaseManager();

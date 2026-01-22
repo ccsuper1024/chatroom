@@ -61,11 +61,13 @@ TEST(IntegrationTest, ChatFlow) {
 
     try {
         ChatRoomClient clientA("127.0.0.1", TEST_PORT);
-        bool loginA = clientA.login("Alice");
+        clientA.registerUser("Alice", "password123");
+        bool loginA = clientA.login("Alice", "password123");
         ASSERT_TRUE(loginA) << "Client A login failed";
 
         ChatRoomClient clientB("127.0.0.1", TEST_PORT);
-        bool loginB = clientB.login("Bob");
+        clientB.registerUser("Bob", "password123");
+        bool loginB = clientB.login("Bob", "password123");
         ASSERT_TRUE(loginB) << "Client B login failed";
 
         std::string msgContent = "Hello Bob!";
@@ -135,7 +137,8 @@ TEST(IntegrationTest, PersistenceTest) {
 
         try {
             ChatRoomClient client("127.0.0.1", TEST_PORT);
-            if (client.login("PersistUser")) {
+            client.registerUser("PersistUser", "persist123");
+            if (client.login("PersistUser", "persist123")) {
                 client.sendMessage("Persistent Message");
             }
         } catch (...) {}
@@ -156,7 +159,8 @@ TEST(IntegrationTest, PersistenceTest) {
 
         try {
             ChatRoomClient client("127.0.0.1", TEST_PORT);
-            ASSERT_TRUE(client.login("Checker"));
+            client.registerUser("Checker", "password123");
+            ASSERT_TRUE(client.login("Checker", "password123"));
             
             auto messages = client.getMessages();
             bool found = false;
@@ -211,8 +215,9 @@ TEST(IntegrationTest, ConcurrencyTest) {
                 ChatRoomClient client("127.0.0.1", TEST_PORT);
                 // Retry login if failed due to contention/limit (though limit is raised)
                 bool logged_in = false;
+                client.registerUser(username, "pass" + std::to_string(i));
                 for(int r=0; r<3; ++r) {
-                    if(client.login(username)) {
+                    if(client.login(username, "pass" + std::to_string(i))) {
                         logged_in = true;
                         break;
                     }
@@ -241,7 +246,8 @@ TEST(IntegrationTest, ConcurrencyTest) {
     // Verify server is still responsive
     try {
         ChatRoomClient admin("127.0.0.1", TEST_PORT);
-        if (admin.login("Admin")) {
+        admin.registerUser("Admin", "adminpass");
+        if (admin.login("Admin", "adminpass")) {
             auto stats_str = admin.getStats();
             EXPECT_FALSE(stats_str.empty());
         } else {
@@ -309,7 +315,8 @@ TEST(IntegrationTest, PrometheusMetrics) {
     // Make some requests to generate metrics
     {
         ChatRoomClient client("127.0.0.1", TEST_PORT);
-        client.login("MetricsUser");
+        client.registerUser("MetricsUser", "metricspass");
+        client.login("MetricsUser", "metricspass");
         client.sendMessage("Testing Metrics");
     }
 

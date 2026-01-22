@@ -92,6 +92,9 @@ ChatRoomServer::ChatRoomServer(int port)
 
     http_server_->registerHandler("/login", 
         [this](const HttpRequest& req) { return handleLogin(req); });
+
+    http_server_->registerHandler("/register", 
+        [this](const HttpRequest& req) { return handleRegister(req); });
     
     http_server_->registerHandler("/send", 
         [this](const HttpRequest& req) { return handleSendMessage(req); });
@@ -175,8 +178,29 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
     try {
         auto req_json = json::parse(request.body);
         std::string username = req_json.value("username", "");
+        std::string password = req_json.value("password", "");
+        
         if (!validateUsername(username)) {
             return CreateErrorResponse(ErrorCode::INVALID_USERNAME);
+        }
+
+        // Validate password
+        if (!DatabaseManager::instance().validateUser(username, password)) {
+            // To prevent username enumeration, we could use a generic error, but for now specific is fine or use INVALID_REQUEST
+            // Or maybe we don't have INVALID_CREDENTIALS in ErrorCode.
+            // Let's assume we can return a custom error or just use INVALID_REQUEST with message
+            // Checking ErrorCode enum might be needed, but CreateErrorResponse takes ErrorCode.
+            // I'll stick to INVALID_REQUEST or similar if I can't find a better one.
+            // Actually, let's look at CreateErrorResponse implementation later if needed.
+            // For now, I'll log and return error.
+            LOG_WARN("Login failed for user {}: invalid credentials", username);
+            // Construct manual error response since I don't know if INVALID_CREDENTIALS exists
+            json error_json;
+            error_json["success"] = false;
+            error_json["error"] = "Invalid username or password";
+            HttpResponse response;
+            response.body = error_json.dump();
+            return response;
         }
         
         auto result = session_manager_->login(username);
@@ -197,6 +221,53 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
     } catch (const std::exception& e) {
         LOG_ERROR("处理登录请求失败: {}", e.what());
         metrics_collector_->recordError("login_error");
+        return CreateErrorResponse(ErrorCode::INVALID_REQUEST);
+    }
+}
+
+HttpResponse ChatRoomServer::handleRegister(const HttpRequest& request) {
+    metrics_collector_->recordRequest("POST", "/register");
+
+    if (!checkRateLimit(request.remote_ip)) {
+        return CreateErrorResponse(ErrorCode::RATE_LIMITED);
+    }
+
+    try {
+        auto req_json = json::parse(request.body);
+        std::string username = req_json.value("username", "");
+        std::string password = req_json.value("password", "");
+
+        if (!validateUsername(username)) {
+            return CreateErrorResponse(ErrorCode::INVALID_USERNAME);
+        }
+
+        if (password.empty()) {
+            json error_json;
+            error_json["success"] = false;
+            error_json["error"] = "Password cannot be empty";
+            HttpResponse response;
+            response.body = error_json.dump();
+            return response;
+        }
+
+        if (DatabaseManager::instance().userExists(username)) {
+            return CreateErrorResponse(ErrorCode::USERNAME_TAKEN);
+        }
+
+        if (DatabaseManager::instance().addUser(username, password)) {
+            LOG_INFO("User registered: {}", username);
+            json resp_json;
+            resp_json["success"] = true;
+            resp_json["username"] = username;
+            HttpResponse response;
+            response.body = resp_json.dump();
+            return response;
+        } else {
+            LOG_ERROR("Failed to register user: {}", username);
+            return CreateErrorResponse(ErrorCode::INTERNAL_ERROR);
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Register failed: {}", e.what());
         return CreateErrorResponse(ErrorCode::INVALID_REQUEST);
     }
 }

@@ -36,7 +36,20 @@ bool SqliteDatabase::init(const DatabaseConfig& config) {
     char* zErrMsg = 0;
     rc = sqlite3_exec(db_, sql, 0, 0, &zErrMsg);
     if (rc != SQLITE_OK) {
-        LOG_ERROR("SQL error: {}", zErrMsg);
+        LOG_ERROR("SQL error (create messages): {}", zErrMsg);
+        sqlite3_free(zErrMsg);
+        return false;
+    }
+
+    const char* user_sql = "CREATE TABLE IF NOT EXISTS users ("
+                           "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                           "username TEXT NOT NULL UNIQUE,"
+                           "password TEXT NOT NULL"
+                           ");";
+    
+    rc = sqlite3_exec(db_, user_sql, 0, 0, &zErrMsg);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("SQL error (create users): {}", zErrMsg);
         sqlite3_free(zErrMsg);
         return false;
     }
@@ -218,4 +231,77 @@ long long SqliteDatabase::getMessageCount() {
     }
     sqlite3_finalize(stmt);
     return count;
+}
+
+bool SqliteDatabase::addUser(const std::string& username, const std::string& password) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!initialized_ || !db_) return false;
+
+    const char* sql = "INSERT INTO users (username, password) VALUES (?, ?);";
+    sqlite3_stmt* stmt;
+    
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("Failed to prepare statement: {}", sqlite3_errmsg(db_));
+        return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, password.c_str(), -1, SQLITE_STATIC);
+    
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        LOG_ERROR("Execution failed: {}", sqlite3_errmsg(db_));
+        sqlite3_finalize(stmt);
+        return false;
+    }
+
+    sqlite3_finalize(stmt);
+    return true;
+}
+
+bool SqliteDatabase::validateUser(const std::string& username, const std::string& password) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!initialized_ || !db_) return false;
+
+    const char* sql = "SELECT password FROM users WHERE username = ?;";
+    sqlite3_stmt* stmt;
+    
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("Failed to prepare statement: {}", sqlite3_errmsg(db_));
+        return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_STATIC);
+    
+    bool valid = false;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* stored_password = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        if (stored_password && password == stored_password) {
+            valid = true;
+        }
+    }
+
+    sqlite3_finalize(stmt);
+    return valid;
+}
+
+bool SqliteDatabase::userExists(const std::string& username) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!initialized_ || !db_) return false;
+
+    const char* sql = "SELECT 1 FROM users WHERE username = ?;";
+    sqlite3_stmt* stmt;
+    
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK) {
+        return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_STATIC);
+    
+    bool exists = (sqlite3_step(stmt) == SQLITE_ROW);
+    sqlite3_finalize(stmt);
+    return exists;
 }
