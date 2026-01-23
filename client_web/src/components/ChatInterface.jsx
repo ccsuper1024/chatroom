@@ -77,7 +77,7 @@ const INITIAL_CONVERSATIONS = [
 
 // --- Components ---
 
-export default function ChatInterface({ username, ws, onLogout, onOpenSettings }) {
+export default function ChatInterface({ username, userId, ws, onLogout, onOpenSettings }) {
   const [activeTab, setActiveTab] = useState('chats');
   const [selectedChatId, setSelectedChatId] = useState('c1');
   const [inputText, setInputText] = useState('');
@@ -255,7 +255,7 @@ export default function ChatInterface({ username, ws, onLogout, onOpenSettings }
 
     const newMessage = {
       id: Date.now().toString(),
-      senderId: 'u1', // Me
+      senderId: username, // Use username instead of hardcoded 'u1'
       text: inputText,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       type: 'text'
@@ -279,11 +279,29 @@ export default function ChatInterface({ username, ws, onLogout, onOpenSettings }
 
     // Send via WebSocket if available
     if (ws) {
-        ws.send(JSON.stringify({
+        // If it's a p2p chat (ID is username), send as target_user
+        // If it's a group/room (ID is numeric or room id), send as room_id
+        // For now our logic assumes p2p if it's in user list
+        
+        const payload = {
             type: 'message',
             content: inputText,
-            room_id: selectedChatId
-        }));
+        };
+        
+        // Simple logic: if selectedChatId is in the users list we fetched, it's p2p
+        // But here we might just assume rooms are not supported fully yet or use a flag.
+        // The current implementation uses selectedChatId as room_id in the send call below.
+        // We should fix this to support P2P.
+        
+        // Check if selectedChat is a user or room
+        const chat = conversations.find(c => c.id === selectedChatId);
+        if (chat && chat.type === 'p2p') {
+            payload.target_user = selectedChatId;
+        } else {
+            payload.room_id = selectedChatId;
+        }
+        
+        ws.send(JSON.stringify(payload));
     }
   };
 
@@ -330,8 +348,14 @@ export default function ChatInterface({ username, ws, onLogout, onOpenSettings }
 
         <div className="mt-auto mb-4">
           <NavIcon icon={<Settings />} active={false} onClick={onOpenSettings} />
-          <div className="mt-4 w-10 h-10 rounded-full overflow-hidden border-2 border-slate-700 cursor-pointer">
-            <img src={USERS.me.avatar} alt="Me" />
+          <div className="mt-4 w-10 h-10 rounded-full overflow-hidden border-2 border-slate-700 cursor-pointer group relative">
+            <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`} alt="Me" />
+            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center text-[10px] text-white transition">
+              ID:{userId}
+            </div>
+          </div>
+          <div className="mt-1 text-[10px] text-slate-500 font-mono">
+             {username}
           </div>
         </div>
       </div>
@@ -369,8 +393,11 @@ export default function ChatInterface({ username, ws, onLogout, onOpenSettings }
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-baseline mb-0.5">
-                    <h3 className="font-semibold text-slate-200 truncate">{chat.name}</h3>
-                    <span className="text-xs text-slate-500">{chat.time}</span>
+                    <div className="flex items-baseline gap-1 truncate">
+                      <h3 className="font-semibold text-slate-200 truncate">{chat.name}</h3>
+                      {chat.userId && <span className="text-[10px] text-slate-500 font-mono">#{chat.userId}</span>}
+                    </div>
+                    <span className="text-xs text-slate-500 flex-shrink-0 ml-2">{chat.time}</span>
                   </div>
                   <p className="text-sm text-slate-400 truncate">{chat.lastMessage}</p>
                 </div>
@@ -417,7 +444,7 @@ export default function ChatInterface({ username, ws, onLogout, onOpenSettings }
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-blend-overlay">
               {selectedChat.messages.map((msg, idx) => {
-                const isMe = msg.senderId === 'u1';
+                const isMe = msg.senderId === username;
                 const showAvatar = !isMe && (idx === 0 || selectedChat.messages[idx-1].senderId !== msg.senderId);
                 
                 return (
@@ -437,7 +464,7 @@ export default function ChatInterface({ username, ws, onLogout, onOpenSettings }
                     <div className={`max-w-[70%] ${isMe ? 'items-end' : 'items-start'} flex flex-col`}>
                       {!isMe && showAvatar && selectedChat.type === 'group' && (
                         <span className="text-xs text-slate-400 mb-1 ml-1">
-                          {USERS[Object.keys(USERS).find(key => USERS[key].id === msg.senderId)]?.name || msg.senderId}
+                          {msg.senderId}
                         </span>
                       )}
                       
@@ -638,4 +665,5 @@ const ControlBtn = ({ icon, active, disabled }) => (
   >
     {React.cloneElement(icon, { size: 24 })}
   </button>
+);</button>
 );

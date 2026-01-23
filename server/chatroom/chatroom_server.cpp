@@ -213,11 +213,12 @@ HttpResponse ChatRoomServer::handleLogin(const HttpRequest& request) {
             return CreateErrorResponse(ErrorCode::USERNAME_TAKEN);
         }
         
-        LOG_INFO("用户登录: {} (conn_id={})", username, result.connection_id);
+        LOG_INFO("用户登录: {} (conn_id={}, user_id={})", username, result.connection_id, result.user_id);
         
         json resp_json;
         resp_json["success"] = true;
         resp_json["connection_id"] = result.connection_id;
+        resp_json["user_id"] = result.user_id;
         resp_json["username"] = username;
         
         HttpResponse response;
@@ -295,6 +296,7 @@ HttpResponse ChatRoomServer::handleGetUsers(const HttpRequest& request) {
         for (const auto& session : sessions) {
             json user;
             user["username"] = session.username;
+            user["user_id"] = session.user_id;
             user["client_type"] = session.client_type;
             
             auto idle_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - session.last_heartbeat).count();
@@ -569,6 +571,7 @@ void ChatRoomServer::handleWebSocketMessage(std::shared_ptr<TcpConnection> conn,
                     resp["type"] = "login_response";
                     resp["success"] = true;
                     resp["username"] = username;
+                    resp["user_id"] = DatabaseManager::instance().getUserId(username);
                     
                     std::string respStr = resp.dump();
                     auto frameData = protocols::WebSocketCodec::buildFrame(protocols::WebSocketOpcode::TEXT, respStr);

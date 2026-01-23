@@ -5,6 +5,7 @@
 #include <set>
 
 struct User {
+    long long user_id;
     std::string username;
     std::string client_type;
     long online_seconds;
@@ -47,6 +48,9 @@ public:
     // 获取用户名
     std::string getUsername() const { return username_; }
 
+    // 获取用户ID
+    long long getUserId() const { return user_id_; }
+
     // 房间管理
     void joinRoom(const std::string& room_id);
     void leaveRoom(const std::string& room_id);
@@ -60,6 +64,7 @@ private:
     std::string server_host_;
     int server_port_;
     std::string username_;
+    long long user_id_ = -1;
     std::string connection_id_;
     size_t last_message_count_;
     int sock_fd_ = -1;

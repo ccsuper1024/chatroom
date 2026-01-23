@@ -291,17 +291,40 @@ bool SqliteDatabase::userExists(const std::string& username) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!initialized_ || !db_) return false;
 
-    const char* sql = "SELECT 1 FROM users WHERE username = ?;";
+    const char* sql = "SELECT COUNT(*) FROM users WHERE username = ?;";
     sqlite3_stmt* stmt;
     
     int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, 0);
-    if (rc != SQLITE_OK) {
-        return false;
-    }
+    if (rc != SQLITE_OK) return false;
 
     sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_STATIC);
-    
-    bool exists = (sqlite3_step(stmt) == SQLITE_ROW);
+
+    bool exists = false;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        exists = sqlite3_column_int(stmt, 0) > 0;
+    }
+
     sqlite3_finalize(stmt);
     return exists;
+}
+
+long long SqliteDatabase::getUserId(const std::string& username) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!initialized_ || !db_) return -1;
+
+    const char* sql = "SELECT id FROM users WHERE username = ?;";
+    sqlite3_stmt* stmt;
+    
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK) return -1;
+
+    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_STATIC);
+
+    long long id = -1;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        id = sqlite3_column_int64(stmt, 0);
+    }
+
+    sqlite3_finalize(stmt);
+    return id;
 }

@@ -65,7 +65,8 @@ function App() {
 
   return (
     <ChatInterface 
-      username={user} 
+      username={user?.username}
+      userId={user?.id}
       ws={ws} 
       onLogout={handleLogout}
       onOpenSettings={() => setView('settings')}

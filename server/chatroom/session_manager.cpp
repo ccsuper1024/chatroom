@@ -2,6 +2,7 @@
 #include "utils/server_config.h"
 #include "logger.h"
 #include "net/tcp_connection.h"
+#include "database_manager.h"
 #include <sstream>
 #include <iomanip>
 
@@ -43,13 +44,14 @@ SessionManager::LoginResult SessionManager::login(const std::string& username, c
     // Check if username is already taken
     for (const auto& kv : sessions_) {
         if (kv.second.username == username) {
-            return {false, "Username already taken", ""};
+            return {false, "Username already taken", "", -1};
         }
     }
 
     std::string connection_id = generateConnectionId();
     UserSession session;
     session.username = username;
+    session.user_id = DatabaseManager::instance().getUserId(username);
     session.connection_id = connection_id;
     session.client_type = client_type;
     session.last_heartbeat = std::chrono::system_clock::now();
@@ -58,7 +60,7 @@ SessionManager::LoginResult SessionManager::login(const std::string& username, c
     sessions_[connection_id] = session;
     metrics_collector_->updateActiveSessions(sessions_.size());
     
-    return {true, "", connection_id};
+    return {true, "", connection_id, session.user_id};
 }
 
 void SessionManager::registerSipSession(const std::string& username, std::shared_ptr<TcpConnection> conn) {

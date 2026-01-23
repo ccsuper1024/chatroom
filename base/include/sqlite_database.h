@@ -19,6 +19,7 @@ public:
     bool addUser(const std::string& username, const std::string& password) override;
     bool validateUser(const std::string& username, const std::string& password) override;
     bool userExists(const std::string& username) override;
+    long long getUserId(const std::string& username) override;
 
 private:
     sqlite3* db_;

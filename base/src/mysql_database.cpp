@@ -2,6 +2,23 @@
 #include "logger.h"
 #include <sstream>
 
+class ConnectionGuard {
+public:
+    ConnectionGuard(MysqlDatabase* db) : db_(db) {
+        conn_ = db_->getConnection();
+    }
+    ~ConnectionGuard() {
+        if (conn_) {
+            db_->releaseConnection(conn_);
+        }
+    }
+    MYSQL* get() { return conn_; }
+
+private:
+    MysqlDatabase* db_;
+    MYSQL* conn_;
+};
+
 MysqlDatabase::MysqlDatabase() : current_pool_size_(0), initialized_(false) {
 }
 
@@ -395,31 +412,57 @@ bool MysqlDatabase::validateUser(const std::string& username, const std::string&
 }
 
 bool MysqlDatabase::userExists(const std::string& username) {
-    if (!initialized_) return false;
-    
-    MYSQL* conn = getConnection();
+    ConnectionGuard conn_guard(this);
+    MYSQL* conn = conn_guard.get();
     if (!conn) return false;
 
-    char* escaped_username = new char[username.length() * 2 + 1];
+    std::stringstream ss;
+    char escaped_username[512];
     mysql_real_escape_string(conn, escaped_username, username.c_str(), username.length());
     
-    std::string sql = "SELECT 1 FROM users WHERE username = '" + std::string(escaped_username) + "'";
-    delete[] escaped_username;
+    ss << "SELECT COUNT(*) FROM users WHERE username = '" << escaped_username << "'";
     
-    if (mysql_query(conn, sql.c_str())) {
-        releaseConnection(conn);
+    if (mysql_query(conn, ss.str().c_str())) {
         return false;
     }
     
-    MYSQL_RES* res = mysql_store_result(conn);
+    MYSQL_RES* result = mysql_store_result(conn);
+    if (!result) return false;
+    
     bool exists = false;
-    if (res) {
-        if (mysql_fetch_row(res)) {
-            exists = true;
-        }
-        mysql_free_result(res);
+    MYSQL_ROW row = mysql_fetch_row(result);
+    if (row) {
+        exists = std::stoll(row[0]) > 0;
     }
     
-    releaseConnection(conn);
+    mysql_free_result(result);
     return exists;
+}
+
+long long MysqlDatabase::getUserId(const std::string& username) {
+    ConnectionGuard conn_guard(this);
+    MYSQL* conn = conn_guard.get();
+    if (!conn) return -1;
+
+    std::stringstream ss;
+    char escaped_username[512];
+    mysql_real_escape_string(conn, escaped_username, username.c_str(), username.length());
+    
+    ss << "SELECT id FROM users WHERE username = '" << escaped_username << "'";
+    
+    if (mysql_query(conn, ss.str().c_str())) {
+        return -1;
+    }
+    
+    MYSQL_RES* result = mysql_store_result(conn);
+    if (!result) return -1;
+    
+    long long id = -1;
+    MYSQL_ROW row = mysql_fetch_row(result);
+    if (row) {
+        id = std::stoll(row[0]);
+    }
+    
+    mysql_free_result(result);
+    return id;
 }

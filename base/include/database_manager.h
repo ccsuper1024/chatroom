@@ -28,6 +28,7 @@ public:
     bool addUser(const std::string& username, const std::string& password);
     bool validateUser(const std::string& username, const std::string& password);
     bool userExists(const std::string& username);
+    long long getUserId(const std::string& username);
 
 private:
     DatabaseManager();

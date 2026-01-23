@@ -113,7 +113,10 @@ bool ChatRoomClient::login(const std::string& username, const std::string& passw
             if (resp_json.contains("connection_id") && resp_json["connection_id"].is_string()) {
                 connection_id_ = resp_json["connection_id"].get<std::string>();
             }
-            LOG_INFO("登录成功: {}, connection_id={}", username_, connection_id_);
+            if (resp_json.contains("user_id") && resp_json["user_id"].is_number()) {
+                user_id_ = resp_json["user_id"].get<long long>();
+            }
+            LOG_INFO("登录成功: {}, connection_id={}, user_id={}", username_, connection_id_, user_id_);
             return true;
         } else {
             std::string error_msg = resp_json.value("error", "Unknown error");
@@ -192,6 +195,7 @@ std::vector<User> ChatRoomClient::getUsers() {
             for (const auto& u : resp_json["users"]) {
                 User user;
                 user.username = u.value("username", "unknown");
+                user.user_id = u.value("user_id", -1LL);
                 user.client_type = u.value("client_type", "unknown");
                 user.online_seconds = u.value("online_seconds", 0L);
                 user.idle_seconds = u.value("idle_seconds", 0L);

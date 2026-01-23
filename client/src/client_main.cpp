@@ -50,7 +50,8 @@ void printHelp() {
     std::cout << "/leave <房间> - 离开房间" << std::endl;
     std::cout << "/msg <用户> <内容> - 发送私聊消息" << std::endl;
     std::cout << "/room <房间> <内容> - 发送房间消息" << std::endl;
-    std::cout << "/quit   - 退出聊天室" << std::endl;
+    std::cout << "/logout - 退出登录" << std::endl;
+    std::cout << "/quit   - 退出程序" << std::endl;
     std::cout << "直接输入文本发送消息" << std::endl;
     std::cout << "================" << std::endl;
 }
@@ -70,81 +71,101 @@ int main(int argc, char* argv[]) {
         server_port = std::atoi(argv[2]);
     }
     
-    std::cout << "===== 聊天室客户端 =====" << std::endl;
-    std::cout << "服务器: " << server_host << ":" << server_port << std::endl;
-    std::cout << std::endl;
-    
-    try {
-        // 创建客户端
-        ChatRoomClient client(server_host, server_port);
-        
-        // 登录/注册逻辑
-        std::string username;
-        while (true) {
-            std::cout << "请选择操作: [1] 登录 [2] 注册 [3] 退出: ";
-            std::string choice;
-            if (!std::getline(std::cin, choice)) return 1;
-            
-            if (choice == "3") return 0;
-            
-            if (choice == "1") {
-                std::string password;
-                std::cout << "请输入用户名: ";
-                std::getline(std::cin, username);
-                std::cout << "请输入密码: ";
-                std::getline(std::cin, password);
-                
-                if (username.empty() || password.empty()) {
-                    std::cout << "用户名或密码不能为空" << std::endl;
-                    continue;
-                }
-                
-                if (client.login(username, password)) {
-                    break;
-                } else {
-                    std::cout << "登录失败，请重试。" << std::endl;
-                }
-            } else if (choice == "2") {
-                std::string reg_user, reg_pass;
-                std::cout << "注册用户名: ";
-                std::getline(std::cin, reg_user);
-                std::cout << "注册密码: ";
-                std::getline(std::cin, reg_pass);
-                
-                if (reg_user.empty() || reg_pass.empty()) {
-                    std::cout << "用户名或密码不能为空" << std::endl;
-                    continue;
-                }
-                
-                if (client.registerUser(reg_user, reg_pass)) {
-                    std::cout << "注册成功！请登录。" << std::endl;
-                } else {
-                    std::cout << "注册失败 (可能用户名已存在)。" << std::endl;
-                }
-            }
-        }
-        
-        std::cout << "登录成功！欢迎 " << username << std::endl;
-        std::cout << "输入消息并按回车发送，输入 /help 查看命令" << std::endl;
-        std::cout << "========================" << std::endl;
+    while (g_running) {
+        std::cout << "===== 聊天室客户端 =====" << std::endl;
+        std::cout << "服务器: " << server_host << ":" << server_port << std::endl;
         std::cout << std::endl;
-        
-        // 启动接收消息线程
-        std::thread receive_thread(receiveMessages, std::ref(client));
-        
-        // 主循环：发送消息
-        std::string input;
-        while (g_running && std::getline(std::cin, input)) {
-            if (input.empty()) {
-                continue;
-            }
+
+        try {
+            // 创建客户端
+            ChatRoomClient client(server_host, server_port);
             
-            if (input[0] == '/') {
-                if (input == "/quit") {
-                    std::cout << "正在退出..." << std::endl;
+            // 登录/注册逻辑
+            std::string username;
+            bool logged_in = false;
+            
+            while (g_running) {
+                std::cout << "请选择操作: [1] 登录 [2] 注册 [3] 退出: ";
+                std::string choice;
+                if (!std::getline(std::cin, choice)) {
                     g_running = false;
                     break;
-                } else if (input == "/help") {
+                }
+                
+                if (choice == "3") {
+                    g_running = false;
+                    break;
+                }
+                
+                if (choice == "1") {
+                    std::string password;
+                    std::cout << "请输入用户名: ";
+                    std::getline(std::cin, username);
+                    std::cout << "请输入密码: ";
+                    std::getline(std::cin, password);
+                    
+                    if (username.empty() || password.empty()) {
+                        std::cout << "用户名或密码不能为空" << std::endl;
+                        continue;
+                    }
+                    
+                    if (client.login(username, password)) {
+                        logged_in = true;
+                        break;
+                    } else {
+                        std::cout << "登录失败，请重试。" << std::endl;
+                    }
+                } else if (choice == "2") {
+                    std::string reg_user, reg_pass;
+                    std::cout << "注册用户名: ";
+                    std::getline(std::cin, reg_user);
+                    std::cout << "注册密码: ";
+                    std::getline(std::cin, reg_pass);
+                    
+                    if (reg_user.empty() || reg_pass.empty()) {
+                        std::cout << "用户名或密码不能为空" << std::endl;
+                        continue;
+                    }
+                    
+                    if (client.registerUser(reg_user, reg_pass)) {
+                        std::cout << "注册成功！请登录。" << std::endl;
+                    } else {
+                        std::cout << "注册失败 (可能用户名已存在)。" << std::endl;
+                    }
+                }
+            }
+            
+            if (!g_running || !logged_in) break;
+            
+            std::cout << "登录成功！欢迎 " << username << " (ID: " << client.getUserId() << ")" << std::endl;
+            std::cout << "输入消息并按回车发送，输入 /help 查看命令" << std::endl;
+            std::cout << "========================" << std::endl;
+            std::cout << std::endl;
+            
+            // 启动接收消息线程
+            std::thread receive_thread(receiveMessages, std::ref(client));
+            
+            // 主循环：发送消息
+            std::string input;
+            bool is_logout = false;
+            
+            while (g_running && std::getline(std::cin, input)) {
+                if (input.empty()) {
+                    continue;
+                }
+                
+                if (input[0] == '/') {
+                    if (input == "/quit") {
+                        std::cout << "正在退出..." << std::endl;
+                        g_running = false;
+                        break;
+                    } else if (input == "/logout") {
+                        std::cout << "正在退出登录..." << std::endl;
+                        g_running = false; // 停止接收线程
+                        is_logout = true;
+                        break;
+                    } else if (input == "/help") {
+
                     printHelp();
                 } else if (input == "/users") {
                     auto users = client.getUsers();
@@ -218,16 +239,25 @@ int main(int argc, char* argv[]) {
             }
         }
         
-        g_running = false;
-        
         // 等待接收线程结束
         if (receive_thread.joinable()) {
             receive_thread.join();
         }
+        
+        if (is_logout) {
+            g_running = true;
+            std::cout << "\n=== 已退出登录 ===\n" << std::endl;
+            continue;
+        } else {
+            g_running = false;
+            break;
+        }
+
     } catch (const std::exception& e) {
         std::cerr << "发生错误: " << e.what() << std::endl;
         return 1;
     }
+    } // End outer loop
     
     std::cout << "已退出聊天室" << std::endl;
     

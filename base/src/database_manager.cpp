@@ -64,3 +64,9 @@ bool DatabaseManager::userExists(const std::string& username) {
     if (!db_) return false;
     return db_->userExists(username);
 }
+
+long long DatabaseManager::getUserId(const std::string& username) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!db_) return -1;
+    return db_->getUserId(username);
+}

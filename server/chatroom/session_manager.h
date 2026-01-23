@@ -21,6 +21,7 @@ class TcpConnection;
  * 存储用户的会话信息，包括用户名、连接ID、客户端版本以及心跳和登录时间。
  */
 struct UserSession {
+    long long user_id;
     std::string username;           ///< 用户名
     std::string connection_id;      ///< 唯一连接标识
     std::string client_version;     ///< 客户端版本号
@@ -62,6 +63,7 @@ public:
         bool success;           ///< 登录是否成功
         std::string error_msg;  ///< 错误信息（失败时）
         std::string connection_id; ///< 连接ID（成功时）
+        long long user_id;      ///< 用户ID（成功时）
     };
 
     /**

@@ -38,6 +38,10 @@ protected:
         server_->stop();
     }
 
+    void RegisterUser(const std::string& username, const std::string& password) {
+        DatabaseManager::instance().addUser(username, password);
+    }
+
     HttpResponse CallHandleLogin(const std::string& body, const std::string& ip = "127.0.0.1") {
         HttpRequest req;
         req.method = "POST";
@@ -84,6 +88,8 @@ protected:
 };
 
 TEST_F(ChatRoomServerTest, WebSocketLoginAndMessage) {
+    RegisterUser("ws_user", "123456");
+
     EventLoop* loop = server_->getLoop();
     int fds[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
@@ -101,6 +107,7 @@ TEST_F(ChatRoomServerTest, WebSocketLoginAndMessage) {
     json login_req;
     login_req["type"] = "login";
     login_req["username"] = "ws_user";
+    login_req["password"] = "123456";
     std::string login_str = login_req.dump();
     
     protocols::WebSocketFrame frame;
@@ -165,6 +172,9 @@ TEST_F(ChatRoomServerTest, WebSocketLoginAndMessage) {
 }
 
 TEST_F(ChatRoomServerTest, WebSocketForwarding) {
+    RegisterUser("Alice", "123456");
+    RegisterUser("Bob", "123456");
+
     EventLoop* loop = server_->getLoop();
     
     // User A: Alice
@@ -187,6 +197,7 @@ TEST_F(ChatRoomServerTest, WebSocketForwarding) {
     json login_req_a;
     login_req_a["type"] = "login";
     login_req_a["username"] = "Alice";
+    login_req_a["password"] = "123456";
     std::string login_str_a = login_req_a.dump();
     protocols::WebSocketFrame frame_a;
     frame_a.opcode = protocols::WebSocketOpcode::TEXT;
@@ -201,6 +212,7 @@ TEST_F(ChatRoomServerTest, WebSocketForwarding) {
     json login_req_b;
     login_req_b["type"] = "login";
     login_req_b["username"] = "Bob";
+    login_req_b["password"] = "123456";
     std::string login_str_b = login_req_b.dump();
     protocols::WebSocketFrame frame_b;
     frame_b.opcode = protocols::WebSocketOpcode::TEXT;
@@ -247,6 +259,10 @@ TEST_F(ChatRoomServerTest, WebSocketForwarding) {
 }
 
 TEST_F(ChatRoomServerTest, MultiRoomChat) {
+    RegisterUser("Alice", "123456");
+    RegisterUser("Bob", "123456");
+    RegisterUser("Charlie", "123456");
+
     EventLoop* loop = server_->getLoop();
     
     // User A: Alice
@@ -275,7 +291,7 @@ TEST_F(ChatRoomServerTest, MultiRoomChat) {
 
     // 1. Login all
     auto login = [&](std::shared_ptr<TcpConnection> conn, std::string name, int fd) {
-        json req; req["type"] = "login"; req["username"] = name;
+        json req; req["type"] = "login"; req["username"] = name; req["password"] = "123456";
         std::string str = req.dump();
         protocols::WebSocketFrame frame; frame.opcode = protocols::WebSocketOpcode::TEXT; frame.payload = str;
         HandleWebSocketMessage(conn, frame);
@@ -345,8 +361,10 @@ TEST_F(ChatRoomServerTest, MultiRoomChat) {
 }
 
 TEST_F(ChatRoomServerTest, LoginSuccess) {
+    RegisterUser("testuser", "123456");
     json req_body;
     req_body["username"] = "testuser";
+    req_body["password"] = "123456";
     
     HttpResponse resp = CallHandleLogin(req_body.dump());
     
@@ -372,9 +390,11 @@ TEST_F(ChatRoomServerTest, LoginInvalidUsername) {
 }
 
 TEST_F(ChatRoomServerTest, SendMessageSuccess) {
+    RegisterUser("sender", "123456");
     // First login
     json login_body;
     login_body["username"] = "sender";
+    login_body["password"] = "123456";
     auto login_resp = CallHandleLogin(login_body.dump());
     auto login_resp_json = json::parse(login_resp.body);
     std::string conn_id = login_resp_json["connection_id"];
