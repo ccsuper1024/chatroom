@@ -665,5 +665,4 @@ const ControlBtn = ({ icon, active, disabled }) => (
   >
     {React.cloneElement(icon, { size: 24 })}
   </button>
-);</button>
 );
