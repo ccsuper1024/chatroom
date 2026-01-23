@@ -92,6 +92,8 @@ bool ServerConfig::load(const std::string &config_file) {
         max_message_history = std::stoul(value);
       } else if (key == "history_file_path") {
         history_file_path = value;
+      } else if (key == "static_resource_dir") {
+        static_resource_dir = value;
       } else if (key == "max_message_length") {
         max_message_length = std::stoul(value);
       } else if (key == "rate_limit_enabled") {

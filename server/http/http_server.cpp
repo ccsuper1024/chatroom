@@ -6,7 +6,6 @@
 #include "net/tcp_connection.h"
 #include "utils/server_config.h"
 #include "net/event_loop_thread_pool.h"
-#include "utils/server_error.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -18,9 +17,7 @@
 #include <map>
 #include <fstream>
 #include <filesystem>
-#include <algorithm>
 #include <cctype>
-#include <string_view>
 
 struct HttpConnectionContext {
     enum Protocol { kHttp, kWebSocket };
@@ -107,6 +104,7 @@ void HttpServer::onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp 
 
     while (buf->readableBytes() > 0) {
         if (context->protocol == HttpConnectionContext::kHttp) {
+            LOG_INFO("处理HTTP请求");
             bool complete = false;
             bool bad = false;
             HttpRequest req = parseRequestFromBuffer(buf, complete, bad);
@@ -122,9 +120,11 @@ void HttpServer::onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp 
                 // Protocol might have changed to WebSocket in onRequest
                 continue;
             } else {
+                LOG_INFO("未完成请求，等待更多数据");
                 break; // Wait for more data
             }
         } else if (context->protocol == HttpConnectionContext::kWebSocket) {
+            LOG_INFO("处理WebSocket请求");
             protocols::WebSocketFrame frame;
             // Use beginRead() to get mutable pointer for in-place unmasking
             int consumed = protocols::WebSocketCodec::parseFrame(reinterpret_cast<uint8_t*>(buf->beginRead()), buf->readableBytes(), frame);
@@ -135,11 +135,16 @@ void HttpServer::onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp 
                     ws_handler_(conn, frame);
                 }
             } else if (consumed < 0) {
+                conn->send("HTTP/1.1 400 Bad Request\r\n\r\n");
                 conn->forceClose();
                 return;
             } else {
                 break; // Incomplete frame
             }
+        }else{
+            LOG_ERROR("未知协议");
+            conn->forceClose();
+            return;
         }
     }
 }
@@ -154,7 +159,10 @@ void HttpServer::onRequest(const TcpConnectionPtr& conn, const HttpRequest& req)
         if (req.headers.count("Sec-WebSocket-Key")) {
             secKey = req.headers.at("Sec-WebSocket-Key");
         }
+        LOG_INFO("WebSocket连接升级请求，Sec-WebSocket-Key: {}", secKey);
+        
         std::string acceptKey = protocols::WebSocketCodec::computeAcceptKey(secKey);
+        LOG_INFO("WebSocket连接升级响应，Sec-WebSocket-Accept: {}", acceptKey);
         
         std::string resp = "HTTP/1.1 101 Switching Protocols\r\n"
                            "Upgrade: websocket\r\n"
@@ -183,16 +191,22 @@ void HttpServer::onRequest(const TcpConnectionPtr& conn, const HttpRequest& req)
         });
     } else {
         // Try to serve static file
-        if (!static_resource_dir_.empty() && req.method == "GET") {
+        if (!static_resource_dir_.empty() && (req.method == "GET" || req.method == "HEAD")) {
             thread_pool_.post([this, conn, req]() {
-                std::string path = req.path;
+                std::string url_path = req.path;
                 // Default to index.html for root
-                if (path == "/") {
-                    path = "/index.html";
+                if (url_path == "/") {
+                    url_path = "/index.html";
                 }
                 
-                HttpResponse resp = serveStaticFile(path);
+                HttpResponse resp = serveStaticFile(url_path);
                 
+                // Handle HEAD method: set Content-Length and clear body
+                if (req.method == "HEAD") {
+                    resp.headers["Content-Length"] = std::to_string(resp.body.size());
+                    resp.body.clear();
+                }
+
                 conn->getLoop()->runInLoop([conn, resp, this]() {
                     std::string responseStr = buildResponse(resp);
                     conn->send(responseStr);
@@ -222,6 +236,7 @@ HttpResponse HttpServer::serveStaticFile(const std::string& path) {
         // Remove leading slash
         std::string relative_path = path.size() > 0 && path[0] == '/' ? path.substr(1) : path;
         std::filesystem::path file_path = resource_path / relative_path;
+        LOG_INFO("Serving static file: {}", std::filesystem::absolute(file_path).string());
 
         if (std::filesystem::exists(file_path) && std::filesystem::is_regular_file(file_path)) {
             std::ifstream file(file_path, std::ios::binary);
@@ -245,6 +260,9 @@ HttpResponse HttpServer::serveStaticFile(const std::string& path) {
                 
                 return resp;
             }
+        } else {
+             // Debug log for 404
+             LOG_WARN("Static file not found: {} (Full path: {})", path, std::filesystem::absolute(file_path).string());
         }
         
         resp.status_code = 404;
@@ -261,7 +279,9 @@ std::string HttpServer::buildResponse(const HttpResponse& resp) {
     std::ostringstream oss;
     oss << "HTTP/1.1 " << resp.status_code << " " << resp.status_text << "\r\n";
     oss << "Content-Type: " << resp.content_type << "\r\n";
-    oss << "Content-Length: " << resp.body.size() << "\r\n";
+    if (resp.headers.find("Content-Length") == resp.headers.end()) {
+        oss << "Content-Length: " << resp.body.size() << "\r\n";
+    }
     for (const auto& [key, value] : resp.headers) {
         oss << key << ": " << value << "\r\n";
     }

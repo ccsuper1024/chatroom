@@ -2,9 +2,7 @@
 
 #include <functional>
 #include <map>
-#include <memory>
 #include <string>
-
 #include "net/tcp_server.h"
 #include "net/event_loop.h"
 #include "http/http_codec.h"
@@ -111,10 +109,10 @@ public:
 
     /**
      * @brief 处理静态文件请求
-     * @param path 文件相对路径
+     * @param url_path 请求的URL路径
      * @return HTTP响应
      */
-    HttpResponse serveStaticFile(const std::string& path);
+    HttpResponse serveStaticFile(const std::string& url_path);
 
 private:
     void onConnection(const TcpConnectionPtr& conn);

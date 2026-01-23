@@ -9,9 +9,7 @@
 #include <iomanip>
 #include <sstream>
 #include <atomic>
-#include <thread>
 #include <map>
-#include <fstream>
 #include <filesystem>
 
 static std::atomic<unsigned long long> g_connection_counter{0};
@@ -76,7 +74,7 @@ ChatRoomServer::ChatRoomServer(int port)
         handleWebSocketMessage(conn, frame);
     });
     
-    http_server_->setStaticResourceDir("client_web/dist");
+    http_server_->setStaticResourceDir(ServerConfig::instance().static_resource_dir);
 
     rtsp_server_->setRtspHandler([this](std::shared_ptr<TcpConnection> conn, const protocols::RtspRequest& req) {
         handleRtspMessage(conn, req);
@@ -89,15 +87,6 @@ ChatRoomServer::ChatRoomServer(int port)
     ftp_server_->setFtpHandler([this](std::shared_ptr<TcpConnection> conn, const std::string& command) {
         chat_service_->handleFtpMessage(conn, command);
     });
-
-    http_server_->registerHandler("/", 
-        [this](const HttpRequest& req) {
-            HttpResponse resp;
-            resp.status_code = 302;
-            resp.status_text = "Found";
-            resp.headers["Location"] = "/login";
-            return resp;
-        });
 
     http_server_->registerHandler("/login", 
         [this](const HttpRequest& req) { return handleLogin(req); });
@@ -160,7 +149,7 @@ void ChatRoomServer::start() {
              http_server_->port(), rtsp_server_->port(), sip_server_->port(), ftp_server_->port());
 
     // Set static resource directory for frontend
-    http_server_->setStaticResourceDir("/home/chenchao/githubCode/chatroom/client_web/dist");
+    http_server_->setStaticResourceDir(ServerConfig::instance().static_resource_dir);
 
     http_server_->start();
     rtsp_server_->start();
