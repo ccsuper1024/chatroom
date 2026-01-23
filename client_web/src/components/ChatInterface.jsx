@@ -178,7 +178,7 @@ export default function ChatInterface({ username, userId, ws, onLogout, onOpenSe
                username: u.username,
                userId: u.user_id,
                avatar: getUserAvatar(u.username),
-               status: 'online'
+               status: u.status || 'offline'
              }));
            setContacts(userContacts);
         }
@@ -442,13 +442,19 @@ export default function ChatInterface({ username, userId, ws, onLogout, onOpenSe
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-baseline mb-0.5">
-                       <h3 className="font-semibold text-slate-200 truncate">{contact.username}</h3>
-                       <span className="text-[10px] text-slate-500 font-mono">#{contact.userId}</span>
-                    </div>
-                    <p className="text-sm text-slate-400 truncate">Online</p>
-                  </div>
-                </div>
-              ))}
+                      <h3 className="font-semibold text-slate-200 truncate">{contact.username}</h3>
+                      <span className="text-[10px] text-slate-500 font-mono">#{contact.userId}</span>
+                   </div>
+                   <p className="text-sm text-slate-400 truncate">
+                     {contact.status === 'online' ? (
+                       <span className="text-green-500">在线</span>
+                     ) : (
+                       <span className="text-slate-500">离线</span>
+                     )}
+                   </p>
+                 </div>
+               </div>
+             ))}
             </div>
           )}
         </div>
