@@ -328,3 +328,29 @@ long long SqliteDatabase::getUserId(const std::string& username) {
     sqlite3_finalize(stmt);
     return id;
 }
+
+std::vector<std::pair<std::string, long long>> SqliteDatabase::getAllUsers() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::pair<std::string, long long>> users;
+    if (!initialized_ || !db_) return users;
+
+    const char* sql = "SELECT username, id FROM users ORDER BY username ASC;";
+    sqlite3_stmt* stmt;
+    
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("Failed to prepare statement: {}", sqlite3_errmsg(db_));
+        return users;
+    }
+    
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        long long id = sqlite3_column_int64(stmt, 1);
+        if (name) {
+            users.emplace_back(name, id);
+        }
+    }
+    
+    sqlite3_finalize(stmt);
+    return users;
+}

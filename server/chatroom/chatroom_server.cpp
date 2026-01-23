@@ -290,20 +290,36 @@ HttpResponse ChatRoomServer::handleGetUsers(const HttpRequest& request) {
         resp_json["success"] = true;
         resp_json["users"] = json::array();
         
+        auto db_users = DatabaseManager::instance().getAllUsers();
         auto sessions = session_manager_->getAllSessions();
         auto now = std::chrono::system_clock::now();
         
-        for (const auto& session : sessions) {
+        std::unordered_map<std::string, UserSession> session_map;
+        for (const auto& s : sessions) {
+            session_map[s.username] = s;
+        }
+        
+        for (const auto& db_user : db_users) {
             json user;
-            user["username"] = session.username;
-            user["user_id"] = session.user_id;
-            user["client_type"] = session.client_type;
+            user["username"] = db_user.first;
+            user["user_id"] = db_user.second;
             
-            auto idle_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - session.last_heartbeat).count();
-            auto online_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - session.login_time).count();
-            
-            user["idle_seconds"] = idle_ms / 1000;
-            user["online_seconds"] = online_ms / 1000;
+            if (session_map.count(db_user.first)) {
+                const auto& session = session_map[db_user.first];
+                user["status"] = "online";
+                user["client_type"] = session.client_type;
+                
+                auto idle_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - session.last_heartbeat).count();
+                auto online_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - session.login_time).count();
+                
+                user["idle_seconds"] = idle_ms / 1000;
+                user["online_seconds"] = online_ms / 1000;
+            } else {
+                user["status"] = "offline";
+                user["client_type"] = "";
+                user["idle_seconds"] = 0;
+                user["online_seconds"] = 0;
+            }
             
             resp_json["users"].push_back(user);
         }

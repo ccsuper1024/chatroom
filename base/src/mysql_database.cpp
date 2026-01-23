@@ -466,3 +466,31 @@ long long MysqlDatabase::getUserId(const std::string& username) {
     mysql_free_result(result);
     return id;
 }
+
+std::vector<std::pair<std::string, long long>> MysqlDatabase::getAllUsers() {
+    ConnectionGuard conn_guard(this);
+    MYSQL* conn = conn_guard.get();
+    std::vector<std::pair<std::string, long long>> users;
+    if (!conn) return users;
+
+    std::string sql = "SELECT username, id FROM users ORDER BY username ASC";
+    if (mysql_query(conn, sql.c_str())) {
+        LOG_ERROR("Failed to execute query: {}", mysql_error(conn));
+        return users;
+    }
+
+    MYSQL_RES* res = mysql_store_result(conn);
+    if (!res) return users;
+
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(res))) {
+        if (row[0]) {
+            std::string name = row[0];
+            long long id = row[1] ? std::stoll(row[1]) : 0;
+            users.emplace_back(name, id);
+        }
+    }
+
+    mysql_free_result(res);
+    return users;
+}

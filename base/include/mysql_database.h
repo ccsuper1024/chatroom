@@ -20,8 +20,9 @@ public:
     bool validateUser(const std::string& username, const std::string& password) override;
     bool userExists(const std::string& username) override;
     long long getUserId(const std::string& username) override;
-
-    friend class ConnectionGuard;
+    std::vector<std::pair<std::string, long long>> getAllUsers() override;
+    
+private: friend class ConnectionGuard;
 
 private:
     DatabaseConfig config_;

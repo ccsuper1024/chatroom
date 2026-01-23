@@ -20,8 +20,10 @@ public:
     bool validateUser(const std::string& username, const std::string& password) override;
     bool userExists(const std::string& username) override;
     long long getUserId(const std::string& username) override;
-
+    std::vector<std::pair<std::string, long long>> getAllUsers() override;
+    
 private:
+    void createTables();
     sqlite3* db_;
     std::mutex mutex_;
     bool initialized_;

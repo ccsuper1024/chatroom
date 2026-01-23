@@ -27,4 +27,5 @@ public:
     virtual bool validateUser(const std::string& username, const std::string& password) = 0;
     virtual bool userExists(const std::string& username) = 0;
     virtual long long getUserId(const std::string& username) = 0;
+    virtual std::vector<std::pair<std::string, long long>> getAllUsers() = 0;
 };

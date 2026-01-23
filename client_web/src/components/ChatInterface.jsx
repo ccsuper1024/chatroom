@@ -18,59 +18,55 @@ import {
   Settings
 } from 'lucide-react';
 
-// --- Mock Data ---
-
-const USERS = {
-  me: { id: 'u1', name: '我', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix' },
-  alex: { id: 'u2', name: 'Alex Chen', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex' },
-  sarah: { id: 'u3', name: 'Sarah Wu', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Sarah' },
-  mike: { id: 'u4', name: 'Mike Ross', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Mike' },
-};
+// --- Helpers ---
+const getUserAvatar = (seed) => `https://api.dicebear.com/7.x/avataaars/svg?seed=${seed}`;
 
 const INITIAL_CONVERSATIONS = [
   {
-    id: 'c1',
+    id: 'Alex Chen',
     type: 'p2p',
     name: 'Alex Chen',
-    avatar: USERS.alex.avatar,
+    userId: '1002',
+    avatar: getUserAvatar('Alex Chen'),
     status: 'online',
     lastMessage: '项目进度怎么样了？',
     time: '10:30',
     unread: 2,
     messages: [
-      { id: 'm1', senderId: 'u2', text: '嘿，兄弟！最近怎么样？', time: '10:00', type: 'text' },
-      { id: 'm2', senderId: 'u1', text: '还不错，正在搞那个聊天室项目。', time: '10:05', type: 'text' },
-      { id: 'm3', senderId: 'u2', text: '听起来很酷！支持视频通话吗？', time: '10:06', type: 'text' },
-      { id: 'm4', senderId: 'u1', text: '必须的，正在做 UI 设计。', time: '10:08', type: 'text' },
-      { id: 'm5', senderId: 'u2', text: '项目进度怎么样了？', time: '10:30', type: 'text' },
+      { id: 'm1', senderId: 'Alex Chen', text: '嘿，兄弟！最近怎么样？', time: '10:00', type: 'text' },
+      { id: 'm2', senderId: 'me', text: '还不错，正在搞那个聊天室项目。', time: '10:05', type: 'text' },
+      { id: 'm3', senderId: 'Alex Chen', text: '听起来很酷！支持视频通话吗？', time: '10:06', type: 'text' },
+      { id: 'm4', senderId: 'me', text: '必须的，正在做 UI 设计。', time: '10:08', type: 'text' },
+      { id: 'm5', senderId: 'Alex Chen', text: '项目进度怎么样了？', time: '10:30', type: 'text' },
     ]
   },
   {
-    id: 'c2',
+    id: 'group1',
     type: 'group',
     name: '前端开发组',
-    avatar: '', // Group avatar logic handled in component
+    avatar: '', 
     status: '32 成员',
-    lastMessage: 'Sarah: 下午两点开会',
+    lastMessage: 'Sarah Wu: 下午两点开会',
     time: '09:15',
     unread: 0,
     messages: [
-      { id: 'gm1', senderId: 'u3', text: '大家早上好！', time: '09:00', type: 'text' },
-      { id: 'gm2', senderId: 'u4', text: '早安！今天要把那个 Bug 修了。', time: '09:05', type: 'text' },
-      { id: 'gm3', senderId: 'u3', text: '下午两点开会，大家准时参加。', time: '09:15', type: 'text' },
+      { id: 'gm1', senderId: 'Sarah Wu', text: '大家早上好！', time: '09:00', type: 'text' },
+      { id: 'gm2', senderId: 'Mike Ross', text: '早安！今天要把那个 Bug 修了。', time: '09:05', type: 'text' },
+      { id: 'gm3', senderId: 'Sarah Wu', text: '下午两点开会，大家准时参加。', time: '09:15', type: 'text' },
     ]
   },
   {
-    id: 'c3',
+    id: 'Sarah Wu',
     type: 'p2p',
     name: 'Sarah Wu',
-    avatar: USERS.sarah.avatar,
+    userId: '1003',
+    avatar: getUserAvatar('Sarah Wu'),
     status: 'offline',
     lastMessage: '[语音消息] 12"',
     time: '昨天',
     unread: 0,
     messages: [
-      { id: 'sm1', senderId: 'u3', text: '设计图发给你了。', time: '昨天', type: 'text' },
+      { id: 'sm1', senderId: 'Sarah Wu', text: '设计图发给你了。', time: '昨天', type: 'text' },
     ]
   }
 ];
@@ -79,9 +75,11 @@ const INITIAL_CONVERSATIONS = [
 
 export default function ChatInterface({ username, userId, ws, onLogout, onOpenSettings }) {
   const [activeTab, setActiveTab] = useState('chats');
-  const [selectedChatId, setSelectedChatId] = useState('c1');
+  const [selectedChatId, setSelectedChatId] = useState('Alex Chen');
   const [inputText, setInputText] = useState('');
   const [conversations, setConversations] = useState(INITIAL_CONVERSATIONS);
+  const [contacts, setContacts] = useState([]);
+
   
   // Call State: 'idle', 'calling', 'connected'
   const [callState, setCallState] = useState('idle'); 
@@ -167,32 +165,22 @@ export default function ChatInterface({ username, userId, ws, onLogout, onOpenSe
     return () => ws.removeEventListener('message', handleMessage);
   }, [ws, username, selectedChatId]);
 
-  // Fetch Users
+  // Fetch Users (Contacts)
   useEffect(() => {
     const fetchUsers = async () => {
       try {
         const res = await fetch('/users');
         const data = await res.json();
         if (data.success) {
-           setConversations(prev => {
-             const newConvs = [...prev];
-             data.users.forEach(u => {
-               if (u.username !== username && !newConvs.find(c => c.id === u.username)) {
-                 newConvs.push({
-                   id: u.username,
-                   type: 'p2p',
-                   name: u.username,
-                   avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${u.username}`,
-                   status: 'online',
-                   lastMessage: '',
-                   time: '',
-                   unread: 0,
-                   messages: []
-                 });
-               }
-             });
-             return newConvs;
-           });
+           const userContacts = data.users
+             .filter(u => u.username !== username)
+             .map(u => ({
+               username: u.username,
+               userId: u.user_id,
+               avatar: getUserAvatar(u.username),
+               status: 'online'
+             }));
+           setContacts(userContacts);
         }
       } catch (e) {
         console.error("Failed to fetch users", e);
@@ -203,6 +191,31 @@ export default function ChatInterface({ username, userId, ws, onLogout, onOpenSe
         fetchUsers();
     }
   }, [username]);
+
+  const handleContactClick = (contact) => {
+    const existingChat = conversations.find(c => c.id === contact.username);
+    
+    if (existingChat) {
+        setSelectedChatId(existingChat.id);
+    } else {
+        const newChat = {
+            id: contact.username,
+            type: 'p2p',
+            name: contact.username,
+            userId: contact.userId,
+            avatar: contact.avatar,
+            status: contact.status,
+            lastMessage: '',
+            time: '',
+            unread: 0,
+            messages: []
+        };
+        setConversations(prev => [newChat, ...prev]);
+        setSelectedChatId(newChat.id);
+    }
+    setActiveTab('chats');
+  };
+
 
   // Fetch Message History when Chat Selected
   useEffect(() => {
@@ -360,55 +373,84 @@ export default function ChatInterface({ username, userId, ws, onLogout, onOpenSe
         </div>
       </div>
 
-      {/* --- Chat List Panel --- */}
+      {/* --- List Panel (Chats or Contacts) --- */}
       <div className="w-80 bg-slate-900 flex flex-col border-r border-slate-800 hidden md:flex">
         <div className="p-5">
-          <h1 className="text-2xl font-bold mb-4">消息</h1>
+          <h1 className="text-2xl font-bold mb-4">
+            {activeTab === 'chats' ? '消息' : activeTab === 'contacts' ? '通讯录' : '通话'}
+          </h1>
           <div className="relative">
             <Search className="absolute left-3 top-3 text-slate-500" size={18} />
             <input 
               type="text" 
-              placeholder="搜索聊天或群组..." 
+              placeholder={activeTab === 'contacts' ? "搜索联系人..." : "搜索聊天..."}
               className="w-full bg-slate-800 text-sm text-slate-200 pl-10 pr-4 py-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 transition"
             />
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar">
-          <div className="px-3 pb-2">
-            <div className="text-xs font-semibold text-slate-500 mb-2 px-2 uppercase tracking-wider">最近聊天</div>
-            {conversations.map(chat => (
-              <div 
-                key={chat.id}
-                onClick={() => setSelectedChatId(chat.id)}
-                className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition mb-1 ${
-                  selectedChatId === chat.id ? 'bg-slate-800' : 'hover:bg-slate-800/50'
-                }`}
-              >
-                <div className="relative">
-                  {getAvatar(chat)}
-                  {chat.type === 'p2p' && chat.status === 'online' && (
-                    <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-slate-900"></div>
+          {activeTab === 'chats' && (
+            <div className="px-3 pb-2">
+              <div className="text-xs font-semibold text-slate-500 mb-2 px-2 uppercase tracking-wider">最近聊天</div>
+              {conversations.map(chat => (
+                <div 
+                  key={chat.id}
+                  onClick={() => setSelectedChatId(chat.id)}
+                  className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition mb-1 ${
+                    selectedChatId === chat.id ? 'bg-slate-800' : 'hover:bg-slate-800/50'
+                  }`}
+                >
+                  <div className="relative">
+                    {getAvatar(chat)}
+                    {chat.type === 'p2p' && chat.status === 'online' && (
+                      <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-slate-900"></div>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between items-baseline mb-0.5">
+                      <div className="flex items-baseline gap-1 truncate">
+                        <h3 className="font-semibold text-slate-200 truncate">{chat.name}</h3>
+                        {chat.userId && <span className="text-[10px] text-slate-500 font-mono">#{chat.userId}</span>}
+                      </div>
+                      <span className="text-xs text-slate-500 flex-shrink-0 ml-2">{chat.time}</span>
+                    </div>
+                    <p className="text-sm text-slate-400 truncate">{chat.lastMessage}</p>
+                  </div>
+                  {chat.unread > 0 && (
+                    <div className="w-5 h-5 bg-blue-600 rounded-full flex items-center justify-center text-[10px] font-bold">
+                      {chat.unread}
+                    </div>
                   )}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-baseline mb-0.5">
-                    <div className="flex items-baseline gap-1 truncate">
-                      <h3 className="font-semibold text-slate-200 truncate">{chat.name}</h3>
-                      {chat.userId && <span className="text-[10px] text-slate-500 font-mono">#{chat.userId}</span>}
+              ))}
+            </div>
+          )}
+
+          {activeTab === 'contacts' && (
+            <div className="px-3 pb-2">
+              <div className="text-xs font-semibold text-slate-500 mb-2 px-2 uppercase tracking-wider">所有联系人</div>
+              {contacts.map(contact => (
+                <div 
+                  key={contact.username}
+                  onClick={() => handleContactClick(contact)}
+                  className="flex items-center gap-3 p-3 rounded-xl cursor-pointer transition mb-1 hover:bg-slate-800/50"
+                >
+                  <div className="relative">
+                    <img src={contact.avatar} alt={contact.username} className="w-10 h-10 rounded-full bg-gray-600" />
+                    <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-slate-900 ${contact.status === 'online' ? 'bg-green-500' : 'bg-slate-500'}`}></div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between items-baseline mb-0.5">
+                       <h3 className="font-semibold text-slate-200 truncate">{contact.username}</h3>
+                       <span className="text-[10px] text-slate-500 font-mono">#{contact.userId}</span>
                     </div>
-                    <span className="text-xs text-slate-500 flex-shrink-0 ml-2">{chat.time}</span>
+                    <p className="text-sm text-slate-400 truncate">Online</p>
                   </div>
-                  <p className="text-sm text-slate-400 truncate">{chat.lastMessage}</p>
                 </div>
-                {chat.unread > 0 && (
-                  <div className="w-5 h-5 bg-blue-600 rounded-full flex items-center justify-center text-[10px] font-bold">
-                    {chat.unread}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -453,7 +495,7 @@ export default function ChatInterface({ username, userId, ws, onLogout, onOpenSe
                       <div className="w-8 mr-2 flex-shrink-0">
                         {showAvatar && (
                           <img 
-                            src={USERS[Object.keys(USERS).find(key => USERS[key].id === msg.senderId)]?.avatar || USERS.alex.avatar} 
+                            src={getUserAvatar(msg.senderId)} 
                             className="w-8 h-8 rounded-full" 
                             alt="sender"
                           />
@@ -602,7 +644,7 @@ export default function ChatInterface({ username, userId, ws, onLogout, onOpenSe
              {/* Self View (Picture in Picture) */}
              {callType === 'video' && callState === 'connected' && (
                <div className="absolute top-4 right-4 w-48 aspect-video bg-slate-700 rounded-lg border-2 border-slate-600 shadow-xl overflow-hidden">
-                 <img src={USERS.me.avatar} className="w-full h-full object-cover opacity-90" />
+                 <img src={getUserAvatar(username)} className="w-full h-full object-cover opacity-90" />
                </div>
              )}
 

@@ -29,7 +29,8 @@ public:
     bool validateUser(const std::string& username, const std::string& password);
     bool userExists(const std::string& username);
     long long getUserId(const std::string& username);
-
+    std::vector<std::pair<std::string, long long>> getAllUsers();
+    
 private:
     DatabaseManager();
     ~DatabaseManager();

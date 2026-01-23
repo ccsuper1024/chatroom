@@ -70,3 +70,9 @@ long long DatabaseManager::getUserId(const std::string& username) {
     if (!db_) return -1;
     return db_->getUserId(username);
 }
+
+std::vector<std::pair<std::string, long long>> DatabaseManager::getAllUsers() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!db_) return {};
+    return db_->getAllUsers();
+}
